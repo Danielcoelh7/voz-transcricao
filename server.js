@@ -5,71 +5,63 @@ import cors from "cors";
 import fetch from "node-fetch";
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
-
 app.use(cors());
 
-// Variáveis de ambiente
+const upload = multer({ dest: "uploads/" });
+
+// Hugging Face
 const HF_TOKEN = process.env.HF_TOKEN;
-const HF_TRANSCRIBE_MODEL = "openai/whisper-large";
-const HF_SUMMARY_MODEL = "google/pegasus-xsum";
+if (!HF_TOKEN) console.warn("⚠️ HF_TOKEN não encontrado nas variáveis de ambiente!");
+
+// Rota de teste
+app.get("/", (req, res) => res.send("Backend funcionando!"));
 
 // Rota de transcrição + resumo
 app.post("/transcribe", upload.single("audio"), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
-
-  const filePath = req.file.path;
-
   try {
-    // Ler o arquivo de áudio
-    const audioData = fs.readFileSync(filePath);
+    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
 
-    // 1️⃣ Transcrição
-    const transResp = await fetch(
-      `https://api-inference.huggingface.co/models/${HF_TRANSCRIBE_MODEL}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${HF_TOKEN}`,
-          "Content-Type": "audio/webm" // ou wav, flac conforme o arquivo
-        },
-        body: audioData
-      }
-    );
+    const filePath = req.file.path;
 
-    const transData = await transResp.json();
-    if (transData.error) throw new Error(transData.error);
+    // Enviar áudio para Hugging Face Whisper
+    const formData = new FormData();
+    formData.append("file", fs.createReadStream(filePath));
 
-    const transcription = transData[0]?.text || "Não foi possível transcrever";
+    const transcriptionResp = await fetch("https://api-inference.huggingface.co/models/openai/whisper-large-v3", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${HF_TOKEN}` },
+      body: fs.createReadStream(filePath)
+    });
 
-    // 2️⃣ Resumo
-    const summaryResp = await fetch(
-      `https://api-inference.huggingface.co/models/${HF_SUMMARY_MODEL}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${HF_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ inputs: transcription })
-      }
-    );
+    const transcriptionData = await transcriptionResp.json();
+
+    fs.unlinkSync(filePath);
+
+    if (transcriptionData.error) {
+      return res.status(500).json({ error: transcriptionData.error });
+    }
+
+    const text = transcriptionData.text || "";
+
+    // Resumir usando Hugging Face Pegasus
+    const summaryResp = await fetch("https://api-inference.huggingface.co/models/google/pegasus-xsum", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ inputs: text })
+    });
 
     const summaryData = await summaryResp.json();
-    if (summaryData.error) throw new Error(summaryData.error);
+    const resumo = summaryData[0]?.summary_text || "";
 
-    const resumo = summaryData[0]?.summary_text || "Não foi possível resumir";
+    res.json({ transcricao: text, resumo });
 
-    res.json({ transcricao: transcription, resumo });
-
-  } catch (error) {
-    console.error("❌ ERRO NO BACKEND:", error);
-    res.status(500).json({ error: error.message });
-  } finally {
-    // Remove o arquivo temporário
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (err) {
+    console.error("❌ ERRO NO BACKEND:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Backend rodando na porta ${PORT}`));
+app.listen(3000, () => console.log("✅ Backend rodando em http://localhost:3000"));
