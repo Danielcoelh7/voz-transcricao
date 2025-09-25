@@ -2,48 +2,74 @@ import express from "express";
 import multer from "multer";
 import fs from "fs";
 import cors from "cors";
-import OpenAI from "openai";
-
-// Configurações
+import fetch from "node-fetch";
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.use(cors());
 
+// Variáveis de ambiente
+const HF_TOKEN = process.env.HF_TOKEN;
+const HF_TRANSCRIBE_MODEL = "openai/whisper-large";
+const HF_SUMMARY_MODEL = "google/pegasus-xsum";
+
 // Rota de transcrição + resumo
 app.post("/transcribe", upload.single("audio"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+
+  const filePath = req.file.path;
+
   try {
-    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+    // Ler o arquivo de áudio
+    const audioData = fs.readFileSync(filePath);
 
-    const filePath = req.file.path;
+    // 1️⃣ Transcrição
+    const transResp = await fetch(
+      `https://api-inference.huggingface.co/models/${HF_TRANSCRIBE_MODEL}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${HF_TOKEN}`,
+          "Content-Type": "audio/webm" // ou wav, flac conforme o arquivo
+        },
+        body: audioData
+      }
+    );
 
-    const transcription = await client.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
-      model: "whisper-1",
-    });
+    const transData = await transResp.json();
+    if (transData.error) throw new Error(transData.error);
 
-    fs.unlinkSync(filePath);
+    const transcription = transData[0]?.text || "Não foi possível transcrever";
 
-    const resumoResp = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Você é um assistente que resume textos longos de forma clara para alunos entederem." },
-        { role: "user", content: `Resuma o seguinte texto em até 10 parágrafos:\n\n${transcription.text}` }
-      ]
-    });
+    // 2️⃣ Resumo
+    const summaryResp = await fetch(
+      `https://api-inference.huggingface.co/models/${HF_SUMMARY_MODEL}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: transcription })
+      }
+    );
 
-    const resumo = resumoResp.choices[0].message.content;
+    const summaryData = await summaryResp.json();
+    if (summaryData.error) throw new Error(summaryData.error);
 
-    res.json({ transcricao: transcription.text, resumo });
+    const resumo = summaryData[0]?.summary_text || "Não foi possível resumir";
+
+    res.json({ transcricao: transcription, resumo });
 
   } catch (error) {
     console.error("❌ ERRO NO BACKEND:", error);
-    res.status(500).json({ error: "Erro ao processar áudio" });
+    res.status(500).json({ error: error.message });
+  } finally {
+    // Remove o arquivo temporário
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Backend rodando na porta ${PORT}`));
-
