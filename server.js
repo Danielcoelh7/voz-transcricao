@@ -24,8 +24,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 
     const filePath = req.file.path;
 
-    // Chamada para Hugging Face Whisper
-    const audioStream = fs.createReadStream(filePath);
+    // --- Transcrição via Hugging Face Whisper ---
     const transcriptionResp = await fetch(
       "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
       {
@@ -34,11 +33,22 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
           Authorization: `Bearer ${HF_TOKEN}`,
           "Content-Type": "application/octet-stream"
         },
-        body: audioStream
+        body: fs.createReadStream(filePath)
       }
     );
 
-    const transcriptionData = await transcriptionResp.json();
+    const contentType = transcriptionResp.headers.get("content-type");
+    let transcriptionData;
+
+    if (contentType && contentType.includes("application/json")) {
+      transcriptionData = await transcriptionResp.json();
+    } else {
+      const text = await transcriptionResp.text();
+      console.error("❌ Retorno inesperado do HF:", text);
+      fs.unlinkSync(filePath);
+      return res.status(500).json({ error: "Erro no Hugging Face: retorno inesperado" });
+    }
+
     fs.unlinkSync(filePath); // remove arquivo temporário
 
     if (transcriptionData.error) {
@@ -47,7 +57,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 
     const text = transcriptionData.text || "";
 
-    // Chamada para Hugging Face Pegasus para resumo
+    // --- Resumo via Hugging Face Pegasus ---
     const summaryResp = await fetch(
       "https://api-inference.huggingface.co/models/google/pegasus-xsum",
       {
