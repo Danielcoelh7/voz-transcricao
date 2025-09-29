@@ -5,16 +5,18 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
-     "postinstall": "npm install ffmpeg-static"
+    "start": "node server.js",
+    "postinstall": "npm install ffmpeg-static" 
+    
   },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "multer": "*",
-    "node-fetch": "^3.3.2"
-    "fluent-ffmpeg": "^2.1.2",
+    "node-fetch": "^3.3.2",
+    "fluent-ffmpeg": "^2.1.2", 
     "ffmpeg-static": "^5.2.0" 
+    
   },
   "engines": {
     "node": ">=18.0.0"
