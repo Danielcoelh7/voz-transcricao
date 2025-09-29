@@ -51,7 +51,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 
     // 3. ENVIAR PARA O HUGGING FACE
     const transcriptionResp = await fetch(
-      "https://api-inference.huggingface.co/models/openai/whisper-small", // Use o modelo small/base
+      "https://api-inference.huggingface.co/models/facebook/wav2vec2-base-960h", // Use o modelo small/base
       {
         method: "POST",
         headers: {
@@ -103,3 +103,4 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => console.log(`✅ Backend rodando na porta ${PORT}`));
+
