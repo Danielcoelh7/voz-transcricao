@@ -20,7 +20,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
     const audioMimeType = req.file.mimetype; // Obtém o tipo real do arquivo (ex: 'audio/webm')
 
     const transcriptionResp = await fetch(
-      "https://api-inference.huggingface.co/models/fal-ai/whisper",
+      "https://api-inference.huggingface.co/models/openai/whisper-large-v2",
       {
         method: "POST",
         headers: {
@@ -72,3 +72,4 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => console.log(`✅ Backend rodando na porta ${PORT}`));
+
