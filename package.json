@@ -1,7 +1,7 @@
 {
   "name": "audio-transcription-app",
   "version": "1.0.0",
-  "description": "Backend para gravador e transcrição de áudio usando Hugging Face",
+  "description": "Backend para gravador e transcrição de áudio usando Gemini",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "multer": "*",
-    "node-fetch": "^3.3.2"
+    "@google/genai": "^0.1.0" 
   },
   "engines": {
     "node": ">=18.0.0"
