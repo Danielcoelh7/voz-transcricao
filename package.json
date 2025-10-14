@@ -1,20 +1,20 @@
 {
-  "name": "audio-transcription-app",
+  "name": "gemini-transcriber-server",
   "version": "1.0.0",
-  "description": "Backend para gravador e transcrição de áudio usando Gemini",
-  "type": "module",
+  "description": "Servidor Express para transcrição de áudio usando Google Gemini (v2.0) com chunking e fallback automático de modelo.",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "fluent-ffmpeg": "^2.1.2",
-    "ffmpeg-static": "^5.2.0",
+    "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
-    "multer": "*",
-    "uuid": "^9.0.1",
-    "@google/generative-ai": "^0.13.0"
+    "express": "^4.19.2",
+    "fluent-ffmpeg": "^2.1.3",
+    "ffmpeg-static": "^5.2.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^9.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
