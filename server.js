@@ -76,7 +76,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
                     const prompt = "Transcreva o áudio a seguir na íntegra. Não adicione nenhum comentário além da transcrição pura do texto.";
                     
                     const response = await ai.models.generateContent({
-                        model: "gemini-1.5-flash",
+                        model: "gemini-1.5-pro-latest",
                         contents: [audioPart, prompt],
                     });
                     
@@ -121,3 +121,4 @@ app.get("/status/:jobId", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Backend com chunking rodando na porta ${PORT}`));
+
