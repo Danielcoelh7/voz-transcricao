@@ -211,11 +211,46 @@ app.get("/status/:jobId", (req, res) => {
   res.json(job);
 });
 
+// ===================================
+// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES
+// ===================================
+app.post("/generate-activity", async (req, res) => {
+    const { summaryText, options } = req.body;
+
+    if (!summaryText || !options) {
+        return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
+    }
+
+    let prompt = `Com base nos seguintes tópicos de um resumo:\n"""\n${summaryText}\n"""\n\nElabore uma atividade escolar seguindo RIGOROSAMENTE as seguintes regras:`;
+
+    if (options.type === "dissertativa") {
+        prompt += `\n- Crie 5 questões dissertativas que explorem os conceitos apresentados.\n- As perguntas devem incentivar o pensamento crítico e a reflexão sobre os tópicos.`;
+    } else if (options.type === "objetiva") {
+        prompt += `\n- Tipo de questão: "${options.questionType}".\n- Nível de dificuldade: "${options.difficulty}".\n- Quantidade: Crie exatamente ${options.quantity} questões.\n- Numere cada questão claramente (1., 2., 3., ...).\n- Se o tipo for "múltipla escolha", forneça 4 alternativas (A, B, C, D).\n- No final de TUDO, adicione uma seção chamada "GABARITO" com as respostas corretas.`;
+    }
+
+    console.log(`[JOB ATIVIDADE] Gerando atividade do tipo "${options.type}"...`);
+
+    try {
+        const model = await selecionarModeloDisponivel();
+        const result = await model.generateContent(prompt);
+        const activityText = result.response.text();
+        res.json({ activityText });
+    } catch (error) {
+        console.error("[JOB ATIVIDADE] Erro:", error.message);
+        res.status(500).json({ error: "Ocorreu um erro na IA ao gerar a atividade." });
+    }
+});
+
+
+
+
 // ================================
-// 3️⃣ INICIALIZAÇÃO DO SERVIDOR
+// 4 INICIALIZAÇÃO DO SERVIDOR
 // ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
