@@ -7,21 +7,27 @@ import { v4 as uuidv4 } from "uuid";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 
+// ==========================
 // Configuração do FFmpeg
+// ==========================
 ffmpeg.setFfmpegPath(ffmpegStatic);
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
 app.use(cors());
 
-// Chave da API do Gemini
+// ==========================
+// Configuração da API Gemini
+// ==========================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// "Banco" em memória para controlar os jobs
+// Banco em memória para controlar os jobs
 const jobs = {};
 
+// ==========================
 // Função auxiliar: converte arquivo em formato aceito pelo Gemini
+// ==========================
 function fileToGenerativePart(path, mimeType) {
   return {
     inlineData: {
@@ -29,6 +35,38 @@ function fileToGenerativePart(path, mimeType) {
       mimeType,
     },
   };
+}
+
+// ==========================
+// Função: selecionar modelo disponível automaticamente
+// ==========================
+async function selecionarModeloDisponivel() {
+  const modelosPreferidos = [
+    "gemini-2.0-flash",
+    "gemini-2.0-pro",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+  ];
+
+  for (const nomeModelo of modelosPreferidos) {
+    try {
+      console.log(`[INFO] Testando modelo: ${nomeModelo}...`);
+      const model = genAI.getGenerativeModel({ model: nomeModelo });
+
+      // Teste rápido de disponibilidade
+      const result = await model.generateContent("Teste de disponibilidade do modelo.");
+      if (result?.response) {
+        console.log(`[SUCESSO] Modelo disponível: ${nomeModelo}`);
+        return model;
+      }
+    } catch (err) {
+      const code = err?.status || err?.statusCode || err?.code;
+      console.warn(`[ERRO] Modelo ${nomeModelo} falhou (${code || err.message}). Tentando o próximo...`);
+      if (code === 429 || code === 503) continue;
+    }
+  }
+
+  throw new Error("Nenhum modelo Gemini disponível no momento.");
 }
 
 // ================================
@@ -64,9 +102,6 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
   ffmpeg(filePath)
     .outputOptions(["-f segment", "-segment_time 120", "-c copy"]) // 2 minutos por chunk
     .output(`${outputDir}/chunk_%03d.mp3`)
-    .on("progress", (progress) => {
-      console.log(`[JOB ${jobId}] [FFmpeg] ${progress.timemark}`);
-    })
     .on("end", async () => {
       console.log(`[JOB ${jobId}] Divisão concluída.`);
 
@@ -74,8 +109,10 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       const chunkFiles = fs.readdirSync(outputDir).sort();
       console.log(`[JOB ${jobId}] ${chunkFiles.length} partes encontradas.`);
 
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
       let fullTranscription = [];
+
+      // Seleciona modelo disponível (fallback automático)
+      const model = await selecionarModeloDisponivel();
 
       // =========================================
       // PROCESSAMENTO DE CADA CHUNK (TRANSCRIÇÃO)
@@ -86,16 +123,18 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
           console.log(`[JOB ${jobId}] Transcrevendo ${chunkFiles[i]}...`);
 
           const audioPart = fileToGenerativePart(chunkPath, "audio/mp3");
-          const prompt =
-            "Transcreva o áudio a seguir na íntegra. Não adicione comentários, apenas o texto falado.";
+          const prompt = "Transcreva o áudio a seguir na íntegra, sem comentários.";
 
           const result = await model.generateContent([prompt, audioPart]);
           const text = result.response.text();
 
           fullTranscription.push(text);
           jobs[jobId].progress = ((i + 1) / chunkFiles.length) * 100;
+
+          // Aguarda 2 segundos entre os chunks (evita sobrecarga 503)
+          await new Promise(res => setTimeout(res, 2000));
         } catch (error) {
-          console.error(`[JOB ${jobId}] Erro no chunk ${i + 1}:`, error);
+          console.error(`[JOB ${jobId}] Erro no chunk ${i + 1}:`, error.message);
           fullTranscription.push(`[ERRO NA TRANSCRIÇÃO DO TRECHO ${i + 1}]`);
         }
       }
@@ -119,7 +158,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
         ${fullText}
         `;
 
-        const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const summaryModel = await selecionarModeloDisponivel();
         const summaryResult = await summaryModel.generateContent(summaryPrompt);
         const summaryText = summaryResult.response.text();
 
@@ -148,9 +187,8 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       fs.rmSync(outputDir, { recursive: true, force: true });
       fs.unlinkSync(filePath);
     })
-    .on("error", (err, stdout, stderr) => {
+    .on("error", (err) => {
       console.error(`[JOB ${jobId}] [FFmpeg] ERRO:`, err.message);
-      console.error(stderr);
       jobs[jobId] = { status: "failed", error: "Erro ao dividir o áudio." };
 
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
