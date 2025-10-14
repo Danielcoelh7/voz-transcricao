@@ -2,7 +2,8 @@ import express from "express";
 import multer from "multer";
 import cors from "cors";
 import fs from "fs";
-import { GoogleGenAI } from "@google/genai";
+// Correção na importação para usar a classe correta
+import { GoogleGenerativeAI } from "@google/generative-ai"; 
 import { v4 as uuidv4 } from 'uuid';
 
 // Imports para manipulação de áudio
@@ -16,9 +17,11 @@ const app = express();
 const upload = multer({ dest: "uploads/" });
 app.use(cors());
 
-// Carrega a chave da API do Gemini a partir das variáveis de ambiente do Render
+// Carrega a chave da API do Gemini a partir das variáveis de ambiente
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+// <-- ALTERAÇÃO: A classe se chama GoogleGenerativeAI
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 // "Banco de dados" em memória para armazenar o status dos trabalhos de transcrição
 const jobs = {};
@@ -36,7 +39,7 @@ function fileToGenerativePart(path, mimeType) {
 // 1. ENDPOINT PARA INICIAR A TRANSCRIÇÃO DE FORMA ASSÍNCRONA
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
     if (!req.file) {
-        console.error("[ERRO] Nenhuma arquivo recebido.");
+        console.error("[ERRO] Nenhum arquivo recebido.");
         return res.status(400).json({ error: "Nenhum arquivo de áudio enviado." });
     }
 
@@ -46,12 +49,10 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
 
     console.log(`[JOB ${jobId}] Trabalho iniciado. Arquivo recebido em: ${filePath}`);
 
-    // Cria um diretório temporário para os pedaços de áudio
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // Responde IMEDIATAMENTE ao frontend com o ID do trabalho
     res.status(202).json({ jobId });
 
     // --- INICIA O PROCESSAMENTO PESADO EM SEGUNDO PLANO ---
@@ -59,24 +60,25 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
 
     console.log(`[JOB ${jobId}] Iniciando o FFmpeg para dividir o arquivo.`);
     
-    // Etapa 1: Dividir o áudio em pedaços (chunks)
     ffmpeg(filePath)
         .outputOptions(['-f segment', '-segment_time 60', '-c copy'])
         .output(`${outputDir}/chunk_%03d.mp3`)
         .on('progress', (progress) => {
-            // Este log é para vermos se o FFmpeg está de fato trabalhando
             console.log(`[JOB ${jobId}] [FFmpeg] Progresso da divisão: ${progress.timemark}`);
         })
         .on('end', async () => {
             console.log(`[JOB ${jobId}] [FFmpeg] Divisão concluída com sucesso.`);
             
-            // Etapa 2: Transcrever cada pedaço com o Gemini
             jobs[jobId].status = "processing";
             const chunkFiles = fs.readdirSync(outputDir).sort();
             console.log(`[JOB ${jobId}] Encontrados ${chunkFiles.length} chunks para processar.`);
             
             let fullTranscription = [];
             
+            // <-- ALTERAÇÃO 1: Seleciona o modelo ANTES do loop
+            // Usar "-latest" é a prática recomendada para estabilidade
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+
             for (let i = 0; i < chunkFiles.length; i++) {
                 const chunkPath = `${outputDir}/${chunkFiles[i]}`;
                 try {
@@ -84,12 +86,14 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
                     const audioPart = fileToGenerativePart(chunkPath, 'audio/mp3');
                     const prompt = "Transcreva o áudio a seguir na íntegra. Não adicione nenhum comentário além da transcrição pura do texto.";
                     
-                    const response = await ai.models.generateContent({
-                        model: "gemini-1.5-flash", 
-                        contents: [audioPart, prompt],
-                    });
+                    // <-- ALTERAÇÃO 2: Chama 'generateContent' no objeto 'model'
+                    const result = await model.generateContent([prompt, audioPart]);
+
+                    // <-- ALTERAÇÃO 3: Extrai o texto da resposta corretamente
+                    const response = result.response;
+                    const text = response.text();
                     
-                    fullTranscription.push(response.response.text());
+                    fullTranscription.push(text);
                     jobs[jobId].progress = ((i + 1) / chunkFiles.length) * 100;
 
                 } catch (error) {
@@ -98,7 +102,6 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
                 }
             }
 
-            // Etapa 3: Juntar tudo e finalizar o trabalho
             console.log(`[JOB ${jobId}] Processamento de todos os chunks concluído.`);
             jobs[jobId] = {
                 status: "completed",
@@ -106,18 +109,15 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
                 progress: 100
             };
 
-            // Etapa 4: Limpar os arquivos temporários
             console.log(`[JOB ${jobId}] Limpando arquivos temporários.`);
             fs.rmSync(outputDir, { recursive: true, force: true });
             fs.unlinkSync(filePath);
         })
         .on('error', (err, stdout, stderr) => {
-            // Este log captura erros específicos do FFmpeg
             console.error(`[JOB ${jobId}] [FFmpeg] ERRO FATAL:`, err.message);
-            console.error(`[JOB ${jobId}] [FFmpeg] STDERR:`, stderr); // A saída de erro do FFmpeg é crucial
+            console.error(`[JOB ${jobId}] [FFmpeg] STDERR:`, stderr);
             jobs[jobId] = { status: "failed", error: "Erro ao dividir o arquivo de áudio." };
             
-            // Garante a limpeza dos arquivos mesmo em caso de erro
             if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
         })
@@ -136,7 +136,7 @@ app.get("/status/:jobId", (req, res) => {
     res.json(job);
 });
 
-// Configuração do servidor para rodar na porta fornecida pelo Render
+// Configuração do servidor para rodar na porta fornecida pelo ambiente (ex: Render)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`✅ Backend com chunking rodando na porta ${PORT}`);
