@@ -77,7 +77,7 @@ app.post("/transcribe-chunked", upload.single("audio"), async (req, res) => {
 
   // --- Divide o áudio em chunks de 60s ---
   ffmpeg(filePath)
-    .outputOptions(["-f segment", "-segment_time 60", "-c copy"])
+    .outputOptions(["-f segment", "-segment_time 160", "-c copy"])
     .output(`${outputDir}/chunk_%03d.mp3`)
     .on("end", async () => {
       console.log(`[JOB ${jobId}] Divisão concluída.`);
@@ -150,3 +150,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
+
