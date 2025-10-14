@@ -146,39 +146,39 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       // 🧠 GERAÇÃO DE RESUMO EM TÓPICOS
       // ==============================
       try {
-        jobs[jobId].status = "summarizing";
-        console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
+  jobs[jobId].status = "summarizing";
+  console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
 
-        const summaryPrompt = `
-        Resuma o texto abaixo em tópicos curtos e claros.
-        Cada linha deve começar com o símbolo •
-        Foque nas ideias principais e elimine repetições.
+  const summaryPrompt = `
+  Gere um resumo **em tópicos** (marcados com "•") a partir do texto abaixo.
+  O resumo deve conter as ideias principais, sem repetir frases.
+  Não diga que precisa do texto, apenas gere o resumo.
+  
+  Texto:
+  """${fullText}"""
+  `;
 
-        Texto:
-        ${fullText}
-        `;
+  const summaryModel = await selecionarModeloDisponivel();
+  const summaryResult = await summaryModel.generateContent(summaryPrompt);
+  const summaryText = summaryResult.response.text();
 
-        const summaryModel = await selecionarModeloDisponivel();
-        const summaryResult = await summaryModel.generateContent(summaryPrompt);
-        const summaryText = summaryResult.response.text();
+  jobs[jobId] = {
+    status: "completed",
+    transcription: fullText,
+    summary: summaryText,
+    progress: 100,
+  };
 
-        jobs[jobId] = {
-          status: "completed",
-          transcription: fullText,
-          summary: summaryText,
-          progress: 100,
-        };
-
-        console.log(`[JOB ${jobId}] Resumo gerado com sucesso.`);
-      } catch (error) {
-        console.error(`[JOB ${jobId}] Erro ao gerar resumo:`, error);
-        jobs[jobId] = {
-          status: "completed",
-          transcription: fullText,
-          summary: "[Erro ao gerar resumo automático]",
-          progress: 100,
-        };
-      }
+  console.log(`[JOB ${jobId}] Resumo gerado com sucesso.`);
+} catch (error) {
+  console.error(`[JOB ${jobId}] Erro ao gerar resumo:`, error);
+  jobs[jobId] = {
+    status: "completed",
+    transcription: fullText,
+    summary: "[Erro ao gerar resumo automático]",
+    progress: 100,
+  };
+}
 
       // ==============================
       // LIMPEZA FINAL
@@ -218,3 +218,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
