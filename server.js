@@ -15,6 +15,7 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 const app = express();
 const upload = multer({ dest: "uploads/" });
 app.use(cors());
+app.use(express.json())
 
 // ==========================
 // Configuração da API Gemini
@@ -252,5 +253,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
