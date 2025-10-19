@@ -222,12 +222,14 @@ app.post("/generate-activity", async (req, res) => {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
     }
 
-    let prompt = `Com base nos seguintes tópicos de um resumo:\n"""\n${summaryText}\n"""\n\nElabore uma atividade escolar seguindo RIGOROSAMENTE as seguintes regras:`;
+    // --- PASSO 1: CONSTRUÇÃO DO PROMPT ATUALIZADO ---
+    // O prompt agora pede o gabarito em um formato específico.
+    let prompt = `Com base no resumo: "${summaryText}".\nElabore uma atividade escolar seguindo as regras:\n`;
 
     if (options.type === "dissertativa") {
-        prompt += `\n- Crie 5 questões dissertativas que explorem os conceitos apresentados.\n- As perguntas devem incentivar o pensamento crítico e a reflexão sobre os tópicos.`;
+        prompt += `- Crie exatamente ${options.quantity} questões dissertativas no nível ${options.difficulty}.\n- As perguntas devem incentivar o pensamento crítico.`;
     } else if (options.type === "objetiva") {
-        prompt += `\n- Tipo de questão: "${options.questionType}".\n- Nível de dificuldade: "${options.difficulty}".\n- Quantidade: Crie exatamente ${options.quantity} questões.\n- Numere cada questão claramente (1., 2., 3., ...).\n- Se o tipo for "múltipla escolha", forneça 4 alternativas (A, B, C, D).\n- No final de TUDO, adicione uma seção chamada "GABARITO" com as respostas corretas.`;
+        prompt += `- Tipo de questão: "${options.questionType}".\n- Nível de dificuldade: "${options.difficulty}".\n- Quantidade: Crie exatamente ${options.quantity} questões.\n- Se for múltipla escolha, forneça 4 alternativas (A, B, C, D).\n- **IMPORTANTE: No final de TUDO, adicione as respostas em uma linha separada, formatada EXATAMENTE assim: GABARITO:[A,B,D,C,...]**`;
     }
 
     console.log(`[JOB ATIVIDADE] Gerando atividade do tipo "${options.type}"...`);
@@ -235,8 +237,30 @@ app.post("/generate-activity", async (req, res) => {
     try {
         const model = await selecionarModeloDisponivel();
         const result = await model.generateContent(prompt);
-        const activityText = result.response.text();
-        res.json({ activityText });
+        const fullResponseText = result.response.text();
+
+        // --- PASSO 2: EXTRAÇÃO DO GABARITO ---
+        let activityText = fullResponseText;
+        let answers = [];
+
+        // Regex para encontrar o gabarito no texto. O 'i' no final torna a busca insensível a maiúsculas/minúsculas.
+        const gabaritoMatch = fullResponseText.match(/GABARITO:\[(.*?)\]/i);
+
+        // Se encontrou o padrão "GABARITO:[...]"
+        if (gabaritoMatch && gabaritoMatch[1]) {
+            // Remove a linha do gabarito do texto principal da atividade
+            activityText = fullResponseText.replace(/GABARITO:\[(.*?)\]/i, "").trim();
+            
+            // Extrai as letras, remove espaços em branco e as coloca em um array
+            answers = gabaritoMatch[1].split(',').map(ans => ans.trim().toUpperCase());
+            console.log(`[JOB ATIVIDADE] Gabarito extraído com sucesso:`, answers);
+        } else {
+            console.warn("[JOB ATIVIDADE] Aviso: O formato do gabarito não foi encontrado na resposta da IA.");
+        }
+
+        // --- PASSO 3: ENVIAR OS DOIS DADOS PARA O FRONTEND ---
+        res.json({ activityText, answers });
+
     } catch (error) {
         console.error("[JOB ATIVIDADE] Erro:", error.message);
         res.status(500).json({ error: "Ocorreu um erro na IA ao gerar a atividade." });
@@ -253,5 +277,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
