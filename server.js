@@ -39,7 +39,7 @@ function fileToGenerativePart(path, mimeType) {
 }
 
 // ==========================
-// Função: selecionar modelo disponível automaticamente
+// Função: selecionar modelo disponível automaticamente (A SUA VERSÃO)
 // ==========================
 async function selecionarModeloDisponivel() {
   const modelosPreferidos = [
@@ -71,7 +71,7 @@ async function selecionarModeloDisponivel() {
 }
 
 // ================================
-// 1️⃣ ENDPOINT DE TRANSCRIÇÃO
+// 1️⃣ ENDPOINT DE TRANSCRIÇÃO (ATUALIZADO com formatação de pergunta)
 // ================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
   if (!req.file) {
@@ -143,43 +143,51 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       console.log(`[JOB ${jobId}] Transcrição completa.`);
       const fullText = fullTranscription.join(" ");
 
+      // --- INÍCIO DA ADIÇÃO: LÓGICA DE FORMATAÇÃO DE PERGUNTA ---
+      console.log(`[JOB ${jobId}] Formatando perguntas...`);
+      const regex = /(pergunta)(\s+)(.*?)(\s+)(ponto)/gi;
+      const replacement = '$1$2($3)$4$5';
+      const formattedText = fullText.replace(regex, replacement);
+      // --- FIM DA ADIÇÃO ---
+
+
       // ==============================
       // 🧠 GERAÇÃO DE RESUMO EM TÓPICOS
       // ==============================
       try {
-  jobs[jobId].status = "summarizing";
-  console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
+        jobs[jobId].status = "summarizing";
+        console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
 
-  const summaryPrompt = `
-  Gere um resumo **em tópicos** (marcados com "•") a partir do texto abaixo.
-  O resumo deve conter as ideias principais, sem repetir frases.
-  Não diga que precisa do texto, apenas gere o resumo.
-  
-  Texto:
-  """${fullText}"""
-  `;
+        const summaryPrompt = `
+        Gere um resumo **em tópicos** (marcados com "•") a partir do texto abaixo.
+        O resumo deve conter as ideias principais, sem repetir frases.
+        Não diga que precisa do texto, apenas gere o resumo.
+        
+        Texto:
+        """${formattedText}""" 
+        `; // <--- MODIFICADO: usa formattedText
 
-  const summaryModel = await selecionarModeloDisponivel();
-  const summaryResult = await summaryModel.generateContent(summaryPrompt);
-  const summaryText = summaryResult.response.text();
+        const summaryModel = await selecionarModeloDisponivel();
+        const summaryResult = await summaryModel.generateContent(summaryPrompt);
+        const summaryText = summaryResult.response.text();
 
-  jobs[jobId] = {
-    status: "completed",
-    transcription: fullText,
-    summary: summaryText,
-    progress: 100,
-  };
+        jobs[jobId] = {
+          status: "completed",
+          transcription: formattedText, // <--- MODIFICADO: usa formattedText
+          summary: summaryText,
+          progress: 100,
+        };
 
-  console.log(`[JOB ${jobId}] Resumo gerado com sucesso.`);
-} catch (error) {
-  console.error(`[JOB ${jobId}] Erro ao gerar resumo:`, error);
-  jobs[jobId] = {
-    status: "completed",
-    transcription: fullText,
-    summary: "[Erro ao gerar resumo automático]",
-    progress: 100,
-  };
-}
+        console.log(`[JOB ${jobId}] Resumo gerado com sucesso.`);
+      } catch (error) {
+        console.error(`[JOB ${jobId}] Erro ao gerar resumo:`, error);
+        jobs[jobId] = {
+          status: "completed",
+          transcription: formattedText, // <--- MODIFICADO: usa formattedText
+          summary: "[Erro ao gerar resumo automático]",
+          progress: 100,
+        };
+      }
 
       // ==============================
       // LIMPEZA FINAL
@@ -213,7 +221,7 @@ app.get("/status/:jobId", (req, res) => {
 });
 
 // ===================================
-// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES
+// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES (O SEU CÓDIGO)
 // ===================================
 app.post("/generate-activity", async (req, res) => {
     const { summaryText, options } = req.body;
@@ -268,15 +276,75 @@ app.post("/generate-activity", async (req, res) => {
 });
 
 
+// ===================================
+// 4️⃣ ENDPOINT: VERIFICADOR DE GABARITO (ENDPOINT NOVO ADICIONADO)
+// ===================================
+app.post("/verify-answers", 
+    upload.fields([
+        { name: 'teacherKey', maxCount: 1 },
+        { name: 'studentSheet', maxCount: 1 }
+    ]), 
+    async (req, res) => {
+        // Verifica se os arquivos foram enviados
+        if (!req.files || !req.files.teacherKey || !req.files.studentSheet) {
+            return res.status(400).json({ error: "É necessário enviar os dois arquivos: o gabarito e a foto." });
+        }
+
+        const teacherKeyFile = req.files.teacherKey[0];
+        const studentSheetFile = req.files.studentSheet[0];
+
+        console.log(`[JOB CORREÇÃO] Iniciado. Gabarito: ${teacherKeyFile.path}, Resposta Aluno: ${studentSheetFile.path}`);
+
+        try {
+            // Seleciona um modelo que suporte multimodalidade (texto e imagem)
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+
+            // Prepara os arquivos para a IA
+            const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
+            const studentImagePart = fileToGenerativePart(studentSheetFile.path, studentSheetFile.mimetype);
+
+            // Cria o prompt para a IA
+            const prompt = `
+                Sua tarefa é ser um professor corrigindo uma prova. Eu lhe forneci dois arquivos:
+                1. O gabarito oficial em PDF.
+                2. Uma imagem da folha de respostas preenchida pelo aluno.
+
+                Analise a imagem da folha do aluno e compare as respostas marcadas com o gabarito oficial. Conte o número de acertos.
+
+                Sua resposta final deve ser APENAS a nota no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
+            `;
+
+            const result = await model.generateContent([prompt, teacherKeyPart, studentImagePart]);
+            const fullResponseText = result.response.text();
+
+            // Extrai a nota da resposta da IA
+            const scoreMatch = fullResponseText.match(/NOTA: (\d+\/\d+)/);
+
+            if (scoreMatch && scoreMatch[1]) {
+                console.log(`[JOB CORREÇÃO] Nota encontrada: ${scoreMatch[1]}`);
+                res.json({ grade: scoreMatch[1] });
+            } else {
+                console.error("[JOB CORREÇÃO] Não foi possível extrair a nota da resposta da IA:", fullResponseText);
+                res.status(500).json({ error: "Não consegui extrair a nota. A resposta da IA foi inesperada." });
+            }
+
+        } catch (error) {
+            console.error("[JOB CORREÇÃO] Erro:", error.message);
+            res.status(500).json({ error: "Ocorreu um erro na IA ao corrigir a atividade." });
+        } finally {
+            // Limpa os arquivos temporários após a conclusão
+            fs.unlinkSync(teacherKeyFile.path);
+            fs.unlinkSync(studentSheetFile.path);
+            console.log(`[JOB CORREÇÃO] Arquivos temporários removidos.`);
+        }
+    }
+);
 
 
 // ================================
-// 4 INICIALIZAÇÃO DO SERVIDOR
+// 5️⃣ INICIALIZAÇÃO DO SERVIDOR (Renumerado)
 // ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
-
-
-
