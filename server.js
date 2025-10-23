@@ -305,14 +305,15 @@ app.post("/verify-answers",
 
             // Cria o prompt para a IA
             const prompt = `
-                Sua tarefa é ser um professor corrigindo uma prova. Eu lhe forneci dois arquivos:
-                1. O gabarito oficial em PDF.
-                2. Uma imagem da folha de respostas preenchida pelo aluno.
-                Analise a imagem da folha do aluno e compare as respostas marcadas com o gabarito oficial. 
-                **Importante: O aluno pode ter marcado as respostas de formas diferentes. Considere um círculo totalmente rabiscado, um "X" ou um círculo preenchido como uma resposta marcada.**
-                
+               Sua tarefa é ser um professor corrigindo uma prova. Eu lhe forneci dois arquivos:
+                1. O PDF do "Gabarito do Professor". Este PDF contém as perguntas e as alternativas. **IMPORTANTE: A "Folha de Respostas" no final do PDF pode estar em branco. Você deve IGNORAR a folha de respostas e DEDUZIR o gabarito correto lendo as próprias perguntas e alternativas.**
+                2. Uma imagem da folha de respostas preenchida pelo aluno (com "X" ou rabiscos).
 
-                Sua resposta final deve ser APENAS a nota no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
+                Primeiro, determine o gabarito correto (ex: 1-B, 2-D, 3-C...) lendo as perguntas no PDF.
+                Segundo, compare esse gabarito com as respostas marcadas na imagem do aluno.
+                Terceiro, conte os acertos.
+
+                Sua resposta final deve ser APENAS a nota no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões.
             `;
 
             const result = await model.generateContent([prompt, teacherKeyPart, studentImagePart]);
@@ -349,5 +350,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
