@@ -308,8 +308,9 @@ app.post("/verify-answers",
                 Sua tarefa é ser um professor corrigindo uma prova. Eu lhe forneci dois arquivos:
                 1. O gabarito oficial em PDF.
                 2. Uma imagem da folha de respostas preenchida pelo aluno.
-
-                Analise a imagem da folha do aluno e compare as respostas marcadas com o gabarito oficial. Conte o número de acertos.
+                Analise a imagem da folha do aluno e compare as respostas marcadas com o gabarito oficial. 
+                **Importante: O aluno pode ter marcado as respostas de formas diferentes. Considere um círculo totalmente rabiscado, um "X" ou um círculo preenchido como uma resposta marcada.**
+                
 
                 Sua resposta final deve ser APENAS a nota no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
             `;
@@ -348,4 +349,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
