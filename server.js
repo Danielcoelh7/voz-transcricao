@@ -297,7 +297,7 @@ app.post("/verify-answers",
 
         try {
             // Seleciona um modelo que suporte multimodalidade (texto e imagem)
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
             // Prepara os arquivos para a IA
             const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
@@ -348,3 +348,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
