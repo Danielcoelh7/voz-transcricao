@@ -282,71 +282,88 @@ app.post("/generate-activity", async (req, res) => {
 app.post("/verify-answers", 
     upload.fields([
         { name: 'teacherKey', maxCount: 1 },
-        { name: 'studentSheet', maxCount: 40 }
+        { name: 'studentSheet', maxCount: 10 } // Permite até 10 imagens
     ]), 
     async (req, res) => {
-        // Verifica se os arquivos foram enviados
-       if (!req.files || !req.files.teacherKey || !req.files.studentSheet || req.files.studentSheet.length === 0) {
+        if (!req.files || !req.files.teacherKey || !req.files.studentSheet || req.files.studentSheet.length === 0) {
             return res.status(400).json({ error: "É necessário enviar o PDF do gabarito e pelo menos uma imagem do aluno." });
         }
 
         const teacherKeyFile = req.files.teacherKey[0];
-        const studentSheetFiles = req.files.studentSheet;
+        const studentSheetFiles = req.files.studentSheet; 
 
         console.log(`[JOB CORREÇÃO] Iniciado. Gabarito: ${teacherKeyFile.path}, Respostas Aluno: ${studentSheetFiles.length} imagem(ns)`);
 
-       const tempFilePaths = [teacherKeyFile.path];
+        const tempFilePaths = [teacherKeyFile.path];
         studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
 
+        // Array para guardar os resultados individuais
+        const results = [];
+
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-            // Prepara o PDF do gabarito
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
             const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
-            
-            // <<< MUDANÇA AQUI: Prepara TODAS as imagens do aluno
-            const studentImageParts = studentSheetFiles.map(file => 
-                fileToGenerativePart(file.path, file.mimetype)
-            );
 
-            // <<< MUDANÇA AQUI: Prompt ajustado para múltiplas imagens
-            const prompt = `
-                Sua tarefa é ser um professor corrigindo uma prova. Eu lhe forneci:
-                1. O gabarito oficial em PDF. **IMPORTANTE: Ignore a "Folha de Respostas" no final do PDF se estiver em branco e DEDUZA o gabarito lendo as perguntas.**
-                2. UMA OU MAIS imagens da(s) folha(s) de respostas preenchida(s) pelo aluno (com "X" ou rabiscos). Se houver mais de uma imagem, elas podem ser páginas diferentes da mesma prova.
+            // <<< MUDANÇA AQUI: Loop para processar cada imagem individualmente >>>
+            for (const studentFile of studentSheetFiles) {
+                console.log(`[JOB CORREÇÃO] Processando imagem: ${studentFile.originalname || studentFile.filename}`);
+                const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
 
-                Primeiro, determine o gabarito correto lendo as perguntas no PDF.
-                Segundo, analise TODAS as imagens do aluno e compare as respostas marcadas com o gabarito que você determinou.
-                Terceiro, conte o número total de acertos em todas as imagens.
+                // <<< MUDANÇA AQUI: Prompt focado em UMA imagem por vez >>>
+                const singleImagePrompt = `
+                    Sua tarefa é ser um professor corrigindo UMA PÁGINA de uma prova. Eu lhe forneci:
+                    1. O gabarito oficial em PDF. **IMPORTANTE: Ignore a "Folha de Respostas" no final do PDF se estiver em branco e DEDUZA o gabarito lendo as perguntas.**
+                    2. UMA ÚNICA imagem da folha de respostas preenchida pelo aluno (com "X" ou rabiscos).
 
-                Sua resposta final deve ser APENAS a nota no formato exato 'NOTA: X/Y', onde X é o número total de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
-            `;
+                    Primeiro, determine o gabarito correto lendo as perguntas no PDF.
+                    Segundo, compare esse gabarito com as respostas marcadas na ÚNICA imagem do aluno fornecida.
+                    Terceiro, conte os acertos NESSA IMAGEM.
 
-            // <<< MUDANÇA AQUI: Envia o prompt, o PDF e o ARRAY de imagens
-            const result = await model.generateContent([prompt, teacherKeyPart, ...studentImageParts]); 
-            const fullResponseText = result.response.text();
+                    Sua resposta final deve ser APENAS a nota para ESTA IMAGEM no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
+                `;
 
-            // Extrai a nota da resposta da IA (lógica igual)
-            const scoreMatch = fullResponseText.match(/NOTA: (\d+\/\d+)/);
+                try {
+                    const result = await model.generateContent([singleImagePrompt, teacherKeyPart, studentImagePart]);
+                    const fullResponseText = result.response.text();
+                    const scoreMatch = fullResponseText.match(/NOTA: (\d+\/\d+)/);
 
-            if (scoreMatch && scoreMatch[1]) {
-                console.log(`[JOB CORREÇÃO] Nota encontrada: ${scoreMatch[1]}`);
-                res.json({ grade: scoreMatch[1] });
-            } else {
-                console.error("[JOB CORREÇÃO] Não foi possível extrair a nota da resposta da IA:", fullResponseText);
-                res.status(500).json({ error: "Não consegui extrair a nota. A resposta da IA foi inesperada." });
-            }
+                    if (scoreMatch && scoreMatch[1]) {
+                        console.log(`[JOB CORREÇÃO] Nota para ${studentFile.originalname || studentFile.filename}: ${scoreMatch[1]}`);
+                        // Guarda o nome do arquivo e a nota
+                        results.push({ 
+                            fileName: studentFile.originalname || studentFile.filename, 
+                            grade: scoreMatch[1] 
+                        });
+                    } else {
+                        console.error(`[JOB CORREÇÃO] Não foi possível extrair nota para ${studentFile.originalname || studentFile.filename}:`, fullResponseText);
+                        results.push({ 
+                            fileName: studentFile.originalname || studentFile.filename, 
+                            grade: "Erro na extração" 
+                        });
+                    }
+                } catch (imageError) {
+                     console.error(`[JOB CORREÇÃO] Erro ao processar a imagem ${studentFile.originalname || studentFile.filename}:`, imageError.message);
+                     results.push({ 
+                        fileName: studentFile.originalname || studentFile.filename, 
+                        grade: "Erro na IA" 
+                    });
+                }
+                 // Pequena pausa para evitar sobrecarga da API
+                 await new Promise(resolve => setTimeout(resolve, 1000)); 
+            } // Fim do loop for
+
+            // <<< MUDANÇA AQUI: Envia o array de resultados >>>
+            console.log("[JOB CORREÇÃO] Processamento de todas as imagens concluído.");
+            res.json({ individualGrades: results });
 
         } catch (error) {
-            console.error("[JOB CORREÇÃO] Erro:", error.message);
-            res.status(500).json({ error: "Ocorreu um erro na IA ao corrigir a atividade." });
+            console.error("[JOB CORREÇÃO] Erro geral:", error.message);
+            res.status(500).json({ error: "Ocorreu um erro geral ao corrigir as atividades." });
         } finally {
-            // <<< MUDANÇA AQUI: Limpa TODOS os arquivos temporários
+            // Limpa TODOS os arquivos temporários
             tempFilePaths.forEach(path => {
                 try {
-                    if (fs.existsSync(path)) {
-                        fs.unlinkSync(path);
-                    }
+                    if (fs.existsSync(path)) fs.unlinkSync(path);
                 } catch (err) {
                     console.error(`Erro ao limpar arquivo temporário ${path}:`, err);
                 }
@@ -364,6 +381,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
