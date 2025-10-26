@@ -291,6 +291,9 @@ app.post("/verify-answers",
 
         const teacherKeyFile = req.files.teacherKey[0];
         const studentSheetFiles = req.files.studentSheet; 
+      const generationConfig = {
+                temperature: 0.1, // Valor baixo (0.0 a 1.0) para respostas mais focadas e menos aleatórias
+            };
 
         console.log(`[JOB CORREÇÃO] Iniciado. Gabarito: ${teacherKeyFile.path}, Respostas Aluno: ${studentSheetFiles.length} imagem(ns)`);
 
@@ -311,25 +314,31 @@ app.post("/verify-answers",
 
                 // <<< MUDANÇA AQUI: Prompt focado em UMA imagem por vez >>>
                 const singleImagePrompt = `
-                    Sua tarefa é ser um professor corrigindo UMA PÁGINA de uma prova. Eu lhe forneci:
-                    1. O gabarito oficial em PDF. **IMPORTANTE: Ignore a "Folha de Respostas" no final do PDF se estiver em branco e DEDUZA o gabarito lendo as perguntas.**
-                    2. UMA ÚNICA imagem da folha de respostas preenchida pelo aluno (com "X" ou rabiscos).
+                    TASK: Correct a student's answer sheet image based on an official answer key PDF.
 
-                    Primeiro, determine o gabarito correto lendo as perguntas no PDF.
-                    Segundo, compare esse gabarito com as respostas marcadas na ÚNICA imagem do aluno fornecida.
-                    Terceiro, conte os acertos NESSA IMAGEM.
+                    INPUTS:
+                    1. PDF file: Contains the questions, alternatives, and possibly a blank answer sheet section at the end. THIS IS THE SOURCE OF TRUTH FOR THE CORRECT ANSWERS.
+                    2. IMAGE file: A photo of the student's filled-in answer sheet (using 'X', scribbles, or filled circles).
 
-                    Sua resposta final deve ser APENAS a nota para ESTA IMAGEM no formato exato 'NOTA: X/Y', onde X é o número de acertos e Y é o número total de questões no gabarito. Não adicione nenhum outro texto ou explicação.
+                    INSTRUCTIONS (Follow these steps precisely):
+                    1.  **DEDUCE THE CORRECT ANSWER KEY:** Carefully read ONLY the questions and their multiple-choice options (A, B, C, D) within the PDF file. Determine the correct letter answer for each question number. **CRITICAL: IGNORE ANY SECTION TITLED "Folha de Respostas" or similar within the PDF, as it might be blank or misleading.** Create the definitive answer key internally (e.g., 1-B, 2-D, 3-C...).
+                    2.  **ANALYZE THE STUDENT'S IMAGE:** Look ONLY at the provided IMAGE file. Identify precisely which single letter (A, B, C, or D) the student marked for each question number. Understand that markings can be 'X', scribbles, or filled circles covering the letter/circle.
+                    3.  **HANDLE AMBIGUITY/MULTIPLE MARKS:** If a student marked MORE THAN ONE option for a single question, or if the marking is completely unreadable/ambiguous, count that specific question as INCORRECT. Do not try to guess.
+                    4.  **COMPARE AND COUNT:** Compare the student's marked answers (from step 2) against the correct answer key you deduced (from step 1). Count only the questions where the student marked the single, correct letter.
+                    5.  **OUTPUT FORMAT:** Respond ONLY with the final score for THIS IMAGE in the strict format 'NOTA: X/Y', where X is the count of correct answers and Y is the total number of questions found in the PDF. Do not add any other text, explanation, or greetings. Example: NOTA: 3/5
                 `;
 
-                try {
-                    const result = await model.generateContent([singleImagePrompt, teacherKeyPart, studentImagePart]);
+               try {
+                    // <<< MUDANÇA 3: Passando a configurationConfig para a IA >>>
+                    const result = await model.generateContent(
+                        [singleImagePrompt, teacherKeyPart, studentImagePart],
+                        generationConfig // Adicionado aqui
+                    );
                     const fullResponseText = result.response.text();
                     const scoreMatch = fullResponseText.match(/NOTA: (\d+\/\d+)/);
 
                     if (scoreMatch && scoreMatch[1]) {
                         console.log(`[JOB CORREÇÃO] Nota para ${studentFile.originalname || studentFile.filename}: ${scoreMatch[1]}`);
-                        // Guarda o nome do arquivo e a nota
                         results.push({ 
                             fileName: studentFile.originalname || studentFile.filename, 
                             grade: scoreMatch[1] 
@@ -348,11 +357,9 @@ app.post("/verify-answers",
                         grade: "Erro na IA" 
                     });
                 }
-                 // Pequena pausa para evitar sobrecarga da API
                  await new Promise(resolve => setTimeout(resolve, 1000)); 
             } // Fim do loop for
 
-            // <<< MUDANÇA AQUI: Envia o array de resultados >>>
             console.log("[JOB CORREÇÃO] Processamento de todas as imagens concluído.");
             res.json({ individualGrades: results });
 
@@ -381,6 +388,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
