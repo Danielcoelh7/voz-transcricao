@@ -301,7 +301,7 @@ app.post("/verify-answers",
         const results = [];
 
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
             const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
 
             // <<< MUDANÇA AQUI: Loop para processar cada imagem individualmente >>>
@@ -381,6 +381,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
