@@ -299,7 +299,7 @@ app.post("/verify-answers",
         studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
 
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
             // Prepara o PDF do gabarito
             const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
@@ -364,6 +364,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
