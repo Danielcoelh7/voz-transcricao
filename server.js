@@ -314,19 +314,20 @@ app.post("/verify-answers",
 
                 // <<< MUDANÇA AQUI: Prompt focado em UMA imagem por vez >>>
                 const singleImagePrompt = `
-                   TASK: Correct a student's answer sheet image based on an official answer key PDF.
+                   TASK: Correct a student's answer sheet image based on an official answer key PDF, checking for an invalidation mark.
 
                     INPUTS:
-                    1. PDF file: Contains the questions, alternatives, and possibly a blank answer sheet section at the end. THIS IS THE SOURCE OF TRUTH FOR THE CORRECT ANSWERS.
-                    2. IMAGE file: A photo of the student's filled-in answer sheet (using 'X', scribbles, or filled circles).
+                    1. PDF file: Contains the questions, alternatives, and possibly a blank answer sheet section. THIS IS THE SOURCE OF TRUTH FOR THE CORRECT ANSWERS.
+                    2. IMAGE file: A photo of the student's filled-in answer sheet (using 'X', scribbles, or filled circles). This image might contain a large red 'X' mark indicating the test is invalidated.
 
                     INSTRUCTIONS (Follow these steps precisely):
-                    1.  **DEDUCE THE CORRECT ANSWER KEY:** Carefully read ONLY the questions and their multiple-choice options (A, B, C, D) within the PDF file. Determine the correct letter answer for each question number. **CRITICAL: IGNORE ANY SECTION TITLED "Folha de Respostas" or similar within the PDF.** Create the definitive answer key internally (e.g., 1-B, 2-D, 3-C...).
-                    2.  **ANALYZE THE STUDENT'S IMAGE:** Look ONLY at the provided IMAGE file. Identify precisely which single letter (A, B, C, or D) the student attempted to mark for each question number. Markings can be 'X', scribbles, or filled circles.
-                    3.  **HANDLE AMBIGUITY/MULTIPLE MARKS:** If a student marked MORE THAN ONE option for a single question, or if the marking is completely unreadable/ambiguous, count that question as INCORRECT.
-                    4.  **NEW RULE - CHECK LEGIBILITY:** Even if the student marked the correct letter (e.g., the correct answer is 'B' and they marked 'B'), **if the letter 'B' itself is still clearly legible *through* or *around* the student's mark (meaning the mark was too weak or didn't cover the letter properly), count that question as INCORRECT.** The mark must obscure the letter to be valid.
-                    5.  **COMPARE AND COUNT:** Compare the student's VALID marked answers (following rules 3 and 4) against the correct answer key (from step 1). Count only the questions where the student marked the single, correct letter in a way that obscures it.
-                    6.  **OUTPUT FORMAT:** Respond ONLY with the final score for THIS IMAGE in the strict format 'NOTA: X/Y', where X is the count of correct answers and Y is the total number of questions found in the PDF. Example: NOTA: 3/5
+                    1.  **DEDUCE THE CORRECT ANSWER KEY:** Carefully read ONLY the questions and their multiple-choice options (A, B, C, D) within the PDF file. Determine the correct letter answer for each question number. **CRITICAL: IGNORE ANY SECTION TITLED "Folha de Respostas" or similar within the PDF.** Create the definitive answer key internally (e.g., 1-B, 2-D, 3-C...). Let 'Y' be the total number of questions found.
+                    2.  **CHECK FOR INVALIDATION MARK:** Look CAREFULLY at the provided IMAGE file. Is there a large, distinct 'X' mark drawn in RED anywhere on the sheet?
+                    3.  **OUTPUT IF INVALIDATED:** If you found a prominent RED 'X' mark in step 2, **STOP** immediately and output ONLY 'NOTA: 0/Y' (using the 'Y' from step 1). Do not proceed further.
+                    4.  **ANALYZE STUDENT'S ANSWERS (if NO red 'X' was found):** If no red 'X' was present, analyze the IMAGE file. Identify precisely which single letter (A, B, C, or D) the student attempted to mark for each question number. Markings can be 'X', scribbles, or filled circles.
+                    5.  **HANDLE AMBIGUITY/MULTIPLE MARKS:** If a student marked MORE THAN ONE option for a single question, or if the marking is completely unreadable/ambiguous, count that question as INCORRECT.
+                    6.  **COMPARE AND COUNT (if NO red 'X' was found):** Compare the student's valid marked answers (from step 4 & 5) against the correct answer key (from step 1). Count only the questions where the student marked the single, correct letter. Let 'X' be this count.
+                    7.  **OUTPUT FORMAT (if NO red 'X' was found):** Respond ONLY with the final score for THIS IMAGE in the strict format 'NOTA: X/Y', using the 'X' from step 6 and 'Y' from step 1. Example: NOTA: 3/5
                 `;
 
                try {
@@ -389,6 +390,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
