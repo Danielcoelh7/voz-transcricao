@@ -230,27 +230,27 @@ app.post("/generate-activity", async (req, res) => {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
     }
 
-    // --- CONSTRUÇÃO DO PROMPT DINÂMICO ---
     let prompt = `Com base no resumo: "${summaryText}".\nElabore uma atividade escolar no nível ${options.difficulty} seguindo as regras:\n`;
 
     if (options.type === "dissertativa") {
         prompt += `- Crie exatamente ${options.quantity} questões dissertativas.\n- As perguntas devem incentivar o pensamento crítico.`;
-        // Para dissertativa, não pedimos gabarito explícito no prompt
-        prompt += `\n- Não inclua respostas ou gabarito no final.` // Garantir que não adicione gabarito para dissertativa
+        prompt += `\n- Não inclua respostas ou gabarito no final.`;
 
     } else if (options.type === "objetiva") {
 
-        // --- NOVO BLOCO ESPECÍFICO PARA VERDADEIRO/FALSO ---
+        // --- BLOCO ATUALIZADO PARA V/F TIPO SEQUÊNCIA ---
         if (options.questionType === "verdadeiro ou falso") {
-            prompt += `- Gere EXATAMENTE ${options.quantity} afirmações sobre o texto, que podem ser verdadeiras (V) ou falsas (F).\n`;
-            prompt += `- Formate CADA afirmação iniciando com parênteses vazios: ( ). Exemplo: ( ) O texto discute a economia global.\n`;
-            prompt += `- Numere implicitamente as afirmações (a primeira é 1, a segunda é 2, etc.).\n`;
-            prompt += `- Após TODAS as ${options.quantity} afirmações, inclua EXATAMENTE a frase: "Assinale a alternativa que apresenta a sequência correta, de cima para baixo:"\n`;
-            prompt += `- Em seguida, crie 4 alternativas (A, B, C, D), cada uma contendo uma sequência de V e F correspondente às ${options.quantity} afirmações (Exemplo: A) V, F, V, F).\n`;
-            prompt += `- APENAS UMA dessas 4 alternativas deve conter a sequência CORRETA de V/F baseada nas afirmações que você criou.\n`;
-            prompt += `- **IMPORTANTE: No final de TUDO, adicione a resposta correta em uma linha separada, formatada EXATAMENTE assim: GABARITO:[LetraDaAlternativaCorreta] (Exemplo: GABARITO:[B])**\n`;
+            prompt += `- Crie EXATAMENTE ${options.quantity} questões independentes de Verdadeiro/Falso no formato de sequência.\n`;
+            prompt += `- Numere cada questão principal claramente (1., 2., 3., ... ${options.quantity}.).\n`;
+            prompt += `- PARA CADA UMA DESSAS ${options.quantity} QUESTÕES, faça o seguinte:\n`;
+            prompt += `    1. Crie 4 afirmações curtas sobre o texto (verdadeiras ou falsas).\n`;
+            prompt += `    2. Formate CADA afirmação iniciando com parênteses vazios: ( ). Exemplo: ( ) Afirmação X.\n`;
+            prompt += `    3. Após as 4 afirmações, inclua EXATAMENTE a frase: "Assinale a alternativa que apresenta a sequência correta, de cima para baixo:"\n`;
+            prompt += `    4. Crie 4 alternativas (A, B, C, D), cada uma contendo uma sequência de 4 V's e F's (Exemplo: A) V, F, V, F).\n`;
+            prompt += `    5. APENAS UMA dessas 4 alternativas (A, B, C, D) deve conter a sequência CORRETA de V/F baseada nas 4 afirmações que você criou para ESSA questão.\n`;
+            prompt += `- **IMPORTANTE: No final de TODO o texto da atividade (após a ${options.quantity}ª questão), adicione as respostas corretas (APENAS a letra da alternativa correta para CADA questão principal), em sequência, em uma linha separada, formatada EXATAMENTE assim: GABARITO:[LetraQ1,LetraQ2,...LetraQ${options.quantity}] (Exemplo para 3 questões: GABARITO:[B,A,D])**\n`;
 
-        } else { // Para outros tipos de questões objetivas (múltipla escolha, etc.)
+        } else { // Para outros tipos de questões objetivas
             prompt += `- Tipo de questão: "${options.questionType}".\n`;
             prompt += `- Quantidade: Crie exatamente ${options.quantity} questões.\n`;
             prompt += `- Numere cada questão claramente (1., 2., 3., ...).\n`;
@@ -266,28 +266,23 @@ app.post("/generate-activity", async (req, res) => {
         const result = await model.generateContent(prompt);
         const fullResponseText = result.response.text();
 
-        // --- EXTRAÇÃO DO GABARITO (Mantém a mesma lógica, funciona para ambos os casos) ---
         let activityText = fullResponseText;
-        let answers = []; // Guardará a letra da opção (V/F) ou a sequência de letras (Múltipla Escolha)
+        let answers = []; 
 
         const gabaritoMatch = fullResponseText.match(/GABARITO:\[(.*?)\]/i);
 
         if (gabaritoMatch && gabaritoMatch[1]) {
             activityText = fullResponseText.replace(/GABARITO:\[(.*?)\]/i, "").trim();
-            // A regex captura o conteúdo dentro dos colchetes, seja uma letra ou várias separadas por vírgula
+            // A lógica de extração continua a mesma e funcionará para [B,A,D]
             answers = gabaritoMatch[1].split(',').map(ans => ans.trim().toUpperCase()); 
             console.log(`[JOB ATIVIDADE] Gabarito extraído com sucesso:`, answers);
         } else {
-            // Se for dissertativa, não ter gabarito é normal. Se for objetiva, é um aviso.
             if (options.type === "objetiva") {
                console.warn("[JOB ATIVIDADE] Aviso: O formato do gabarito não foi encontrado na resposta da IA para questão objetiva.");
             } else {
                console.log("[JOB ATIVIDADE] Atividade dissertativa gerada sem gabarito (esperado).");
             }
-            // Retorna activityText mesmo sem gabarito para dissertativas
         }
-
-        // Envia o texto da atividade e o gabarito (se houver) para o frontend
         res.json({ activityText, answers });
 
     } catch (error) {
@@ -411,6 +406,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
