@@ -298,7 +298,7 @@ app.post("/generate-activity", async (req, res) => {
 app.post("/verify-answers", 
     upload.fields([
         { name: 'teacherKey', maxCount: 1 },
-        { name: 'studentSheet', maxCount: 10 } // Permite até 10 imagens
+        { name: 'studentSheet', maxCount: 40 } 
     ]), 
     async (req, res) => {
         if (!req.files || !req.files.teacherKey || !req.files.studentSheet || req.files.studentSheet.length === 0) {
@@ -406,6 +406,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
