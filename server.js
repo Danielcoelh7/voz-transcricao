@@ -73,25 +73,21 @@ async function selecionarModeloDisponivel() {
 // 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Inalterado)
 // ==========================================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
+  // ... (Seu código de transcrição está perfeito, não mudei nada) ...
   if (!req.file) {
     console.error("[ERRO] Nenhum arquivo recebido.");
     return res.status(400).json({ error: "Nenhum arquivo de áudio enviado." });
   }
-
   const jobId = uuidv4();
   const filePath = req.file.path;
   const outputDir = `uploads/${jobId}`;
-
   console.log(`[JOB ${jobId}] Iniciado. Arquivo: ${filePath}`);
-
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
-
   res.status(202).json({ jobId });
   jobs[jobId] = { status: "splitting", progress: 0 };
   console.log(`[JOB ${jobId}] Dividindo o áudio com FFmpeg...`);
-
   ffmpeg(filePath)
     .outputOptions(["-f segment", "-segment_time 120", "-c copy"])
     .output(`${outputDir}/chunk_%03d.mp3`)
@@ -100,10 +96,8 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       jobs[jobId].status = "processing";
       const chunkFiles = fs.readdirSync(outputDir).sort();
       console.log(`[JOB ${jobId}] ${chunkFiles.length} partes encontradas.`);
-
       let fullTranscription = [];
       const model = await selecionarModeloDisponivel();
-
       for (let i = 0; i < chunkFiles.length; i++) {
         const chunkPath = `${outputDir}/${chunkFiles[i]}`;
         try {
@@ -120,14 +114,12 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
           fullTranscription.push(`[ERRO NA TRANSCRIÇÃO DO TRECHO ${i + 1}]`);
         }
       }
-
       console.log(`[JOB ${jobId}] Transcrição completa.`);
       const fullText = fullTranscription.join(" ");
       console.log(`[JOB ${jobId}] Formatando perguntas...`);
       const regex = /(pergunta)(\s+)(.*?)(\s+)(ponto)/gi;
       const replacement = '$1$2($3)$4$5';
       const formattedText = fullText.replace(regex, replacement);
-
       try {
         jobs[jobId].status = "summarizing";
         console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
@@ -158,7 +150,6 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
           progress: 100,
         };
       }
-
       console.log(`[JOB ${jobId}] Limpando arquivos temporários.`);
       fs.rmSync(outputDir, { recursive: true, force: true });
       fs.unlinkSync(filePath);
@@ -247,12 +238,12 @@ app.post("/generate-activity", async (req, res) => {
 // 4️⃣ FUNÇÃO DE CORREÇÃO EM SEGUNDO PLANO (ATUALIZADA)
 // ==========================================================
 /**
- * Esta função roda em segundo plano para corrigir as provas.
- * Ela atualiza o objeto 'jobs' global com o progresso.
+ * Esta função agora recebe o GABARITO como uma string.
+ * Ela não usa mais o PDF do professor.
  */
-async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
-  const job = jobs[jobId];
-  const tempFilePaths = [teacherKeyFile.path];
+async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
+  const job = jobs[jobId]; 
+  const tempFilePaths = []; // <-- PDF não é mais adicionado aqui
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
 
   const generationConfig = {
@@ -260,14 +251,20 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
   };
   const results = [];
 
+  // Prepara o gabarito para o prompt
+  const gabaritoArray = gabaritoString.split(',').map(s => s.trim().toUpperCase());
+  const totalQuestoes = gabaritoArray.length;
+  // Cria um array de "details" para o caso de falha (X vermelho)
+  const invalidDetails = gabaritoArray.map((_, i) => `{ "q": ${i + 1}, "correct": false }`).join(',');
+
+
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
-    const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
+    // O PDF (teacherKeyPart) NÃO é mais enviado
     
     const totalImagens = studentSheetFiles.length;
-    console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens.`);
+    console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
-    // Loop para processar cada imagem
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
@@ -278,57 +275,54 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
       // ==========================================================
-      // <<< MUDANÇA 1: O NOVO PROMPT PEDINDO JSON >>>
+      // <<< MUDANÇA 1: O NOVO PROMPT (MUITO MAIS SIMPLES) >>>
       // ==========================================================
       const singleImagePrompt = `
-        TASK: Correct a student's answer sheet image based on an official answer key PDF, checking for an invalidation mark.
+        TASK: Grade a student's answer sheet image using a provided answer key.
 
         INPUTS:
-        1. PDF file: The source of truth for correct answers.
-        2. IMAGE file: The student's filled-in answer sheet.
+        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
+        2.  IMAGE file: The student's filled-in answer sheet.
 
         INSTRUCTIONS:
-        1.  **DEDUCE KEY:** Read the PDF to determine the correct letter answer for each question number. Let 'Y' be the total number of questions. (e.g., 1-B, 2-D, 3-C...).
-        2.  **CHECK INVALIDATION:** Look at the IMAGE file. Is there a large, distinct 'X' mark in RED?
-        3.  **ANALYZE ANSWERS:** If NO red 'X' is found, analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question.
-        4.  **COMPARE:** Compare the student's answers to the correct key. Mark as incorrect if ambiguous or multiple options are marked. Let 'X' be the total correct count.
-        5.  **GATHER DETAILS:** Create a list of details for each question, showing if the student was correct.
+        1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
+        2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
+        3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
+        4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
+        5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list. Let 'X' be the total correct count.
 
-        OUTPUT FORMAT:
-        Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
+        OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
         
         **If a RED 'X' is found (Invalidated):**
         {
-          "grade": "0/Y",
-          "details": [],
+          "grade": "0/${totalQuestoes}",
+          "details": [${invalidDetails}],
           "invalidated": true
         }
 
         **If NO red 'X' is found (Valid Test):**
         {
-          "grade": "X/Y",
+          "grade": "X/${totalQuestoes}",
           "details": [
-            { "q": 1, "correct": true },
-            { "q": 2, "correct": false },
-            { "q": 3, "correct": true }
+            { "q": 1, "correct": true_ou_false },
+            { "q": 2, "correct": true_ou_false },
+            ... (uma entrada para cada uma das ${totalQuestoes} questões)
           ],
           "invalidated": false
         }
       `;
 
       try {
+        // O PDF não é mais enviado, apenas o prompt e a imagem
         const result = await model.generateContent(
-          [singleImagePrompt, teacherKeyPart, studentImagePart],
+          [singleImagePrompt, studentImagePart],
           generationConfig
         );
         const fullResponseText = result.response.text();
 
-        // ==========================================================
-        // <<< MUDANÇA 2: A NOVA LÓGICA DE PARSE (JSON) >>>
-        // ==========================================================
+        // A lógica de parse é a mesma
         let aiResponse;
         try {
-            // Limpa '```json' e '```' que a IA pode adicionar
             const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
             aiResponse = JSON.parse(cleanedText);
         } catch (e) {
@@ -342,7 +336,6 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
             grade: aiResponse.grade,
-            // <<< AQUI ESTÁ A MUDANÇA: Usando os dados REAIS da IA >>>
             details: aiResponse.details || [] 
           });
         } else {
@@ -364,11 +357,10 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
     // --- FINALIZA O JOB COM SUCESSO ---
     console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
     const finalResultsPayload = { results: results }; 
-    
     job.status = "completed";
     job.progress = 100;
     job.message = "Correção concluída!";
-    job.results = finalResultsPayload; // ADICIONA O RESULTADO FINAL AO JOB
+    job.results = finalResultsPayload;
 
   } catch (error) {
     // --- FINALIZA O JOB COM FALHA ---
@@ -376,7 +368,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
     job.status = "failed";
     job.error = error.message || "Ocorreu um erro geral ao corrigir as atividades.";
   } finally {
-    // --- LIMPEZA DE ARQUIVOS (SEMPRE ACONTECE) ---
+    // --- LIMPEZA DE ARQUIVOS ---
     console.log(`[JOB ${jobId}] Limpando arquivos temporários...`);
     tempFilePaths.forEach(path => {
       try {
@@ -393,17 +385,23 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
 // 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (ATUALIZADO)
 // ==========================================================
 app.post("/start-verification", 
+  // O 'teacherKey' (PDF) foi removido do upload
   upload.fields([
-      { name: 'teacherKey', maxCount: 1 },
-      { name: 'studentSheet', maxCount: 40 }
+      { name: 'studentSheet', maxCount: 40 } 
   ]), 
   (req, res) => {
     
-    if (!req.files || !req.files.teacherKey || !req.files.studentSheet) {
-      return res.status(400).json({ error: "É necessário enviar o PDF do gabarito e pelo menos uma imagem do aluno." });
+    // O 'gabarito' agora vem do 'req.body' (o campo de texto)
+    const { gabarito } = req.body;
+
+    if (!req.files || !req.files.studentSheet) {
+      return res.status(400).json({ error: "É necessário enviar pelo menos uma imagem do aluno." });
     }
     
-    // Assegura que 'studentSheetFiles' seja sempre um array, mesmo com 1 arquivo.
+    if (!gabarito || gabarito.trim() === "") {
+      return res.status(400).json({ error: "É necessário enviar o gabarito (ex: A,B,C)." });
+    }
+    
     const studentSheetFiles = Array.isArray(req.files.studentSheet) 
         ? req.files.studentSheet 
         : [req.files.studentSheet];
@@ -412,7 +410,6 @@ app.post("/start-verification",
       return res.status(400).json({ error: "Nenhuma imagem de aluno foi enviada." });
     }
 
-    const teacherKeyFile = req.files.teacherKey[0];
     const jobId = uuidv4();
 
     jobs[jobId] = {
@@ -424,10 +421,9 @@ app.post("/start-verification",
 
     console.log(`[JOB ${jobId}] Verificação criada. Iniciando em segundo plano...`);
 
-    // Chama a função pesada SEM 'await'
-    corrigirProvas(jobId, teacherKeyFile, studentSheetFiles);
+    // Chama a função pesada SEM 'await' e passa o gabarito
+    corrigirProvas(jobId, studentSheetFiles, gabarito);
 
-    // Responde ao frontend IMEDIATAMENTE
     res.status(202).json({ jobId: jobId });
   }
 );
