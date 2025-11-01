@@ -73,7 +73,7 @@ async function selecionarModeloDisponivel() {
 // 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Inalterado)
 // ==========================================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
-  // ... (Seu código de transcrição está perfeito, não mudei nada) ...
+  // ... (código de transcrição inalterado) ...
   if (!req.file) {
     console.error("[ERRO] Nenhum arquivo recebido.");
     return res.status(400).json({ error: "Nenhum arquivo de áudio enviado." });
@@ -179,7 +179,7 @@ app.get("/status/:jobId", (req, res) => {
 // 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES (Inalterado)
 // ==========================================================
 app.post("/generate-activity", async (req, res) => {
-    // ... (Seu código de gerar atividade está perfeito, não mudei nada) ...
+    // ... (código de gerar atividade inalterado) ...
     const { summaryText, options } = req.body;
     if (!summaryText || !options) {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
@@ -235,15 +235,11 @@ app.post("/generate-activity", async (req, res) => {
 
 
 // ==========================================================
-// 4️⃣ FUNÇÃO DE CORREÇÃO EM SEGUNDO PLANO (ATUALIZADA)
+// 4️⃣ FUNÇÃO DE CORREÇÃO EM SEGUNDO PLANO (ATUALIZADA E CORRIGIDA)
 // ==========================================================
-/**
- * Esta função agora recebe o GABARITO como uma string.
- * Ela não usa mais o PDF do professor.
- */
 async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const job = jobs[jobId]; 
-  const tempFilePaths = []; // <-- PDF não é mais adicionado aqui
+  const tempFilePaths = []; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
 
   const generationConfig = {
@@ -251,16 +247,14 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   };
   const results = [];
 
-  // Prepara o gabarito para o prompt
   const gabaritoArray = gabaritoString.split(',').map(s => s.trim().toUpperCase());
   const totalQuestoes = gabaritoArray.length;
-  // Cria um array de "details" para o caso de falha (X vermelho)
-  const invalidDetails = gabaritoArray.map((_, i) => `{ "q": ${i + 1}, "correct": false }`).join(',');
+  // Cria um array de 'details' FALSOS para o caso de a prova ser invalidada
+  const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
 
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
-    // O PDF (teacherKeyPart) NÃO é mais enviado
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
@@ -275,10 +269,11 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
       // ==========================================================
-      // <<< MUDANÇA 1: O NOVO PROMPT (MUITO MAIS SIMPLES) >>>
+      // <<< MUDANÇA 1: O NOVO PROMPT (SIMPLIFICADO) >>>
       // ==========================================================
+      // Pede APENAS os 'details'. A IA não é mais responsável pela 'grade'.
       const singleImagePrompt = `
-        TASK: Grade a student's answer sheet image using a provided answer key.
+        TASK: Analyze a student's answer sheet image against a provided answer key.
 
         INPUTS:
         1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
@@ -289,20 +284,18 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
         2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
         3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
         4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
-        5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list. Let 'X' be the total correct count.
+        5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list of true/false for each question.
 
         OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
         
         **If a RED 'X' is found (Invalidated):**
         {
-          "grade": "0/${totalQuestoes}",
-          "details": [${invalidDetails}],
+          "details": ${JSON.stringify(invalidDetails)},
           "invalidated": true
         }
 
         **If NO red 'X' is found (Valid Test):**
         {
-          "grade": "X/${totalQuestoes}",
           "details": [
             { "q": 1, "correct": true_ou_false },
             { "q": 2, "correct": true_ou_false },
@@ -313,14 +306,15 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
       `;
 
       try {
-        // O PDF não é mais enviado, apenas o prompt e a imagem
         const result = await model.generateContent(
           [singleImagePrompt, studentImagePart],
           generationConfig
         );
         const fullResponseText = result.response.text();
 
-        // A lógica de parse é a mesma
+        // ==========================================================
+        // <<< MUDANÇA 2: A NOVA LÓGICA DE CÁLCULO >>>
+        // ==========================================================
         let aiResponse;
         try {
             const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -331,23 +325,35 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
             throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
         }
 
-        if (aiResponse && aiResponse.grade) {
-          console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${aiResponse.grade}`);
+        // Verifica se a IA retornou os 'details'
+        if (aiResponse && aiResponse.details) {
+          
+          // --- NOSSO CÓDIGO FAZ A LÓGICA ---
+          // 1. Conta os acertos
+          const correctCount = aiResponse.details.filter(d => d.correct).length;
+          // 2. Cria a string da nota
+          const gradeString = `${correctCount}/${totalQuestoes}`;
+          // --- FIM DA LÓGICA ---
+
+          console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${gradeString}`);
+          
+          // Salva os dados corretos (nota calculada + detalhes da IA)
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
-            grade: aiResponse.grade,
-            details: aiResponse.details || [] 
+            grade: gradeString, // <-- A nossa nota (lógica)
+            details: aiResponse.details // <-- Os detalhes da IA (visual)
           });
+
         } else {
-          throw new Error(`A IA não retornou um JSON com a propriedade 'grade' para a imagem ${studentFile.originalname}.`);
+          throw new Error(`A IA não retornou um JSON com a propriedade 'details' para a imagem ${studentFile.originalname}.`);
         }
         
       } catch (imageError) {
         console.error(`[JOB ${jobId}] Erro ao processar a imagem ${studentFile.originalname}:`, imageError.message);
         results.push({ 
           fileName: studentFile.originalname || studentFile.filename, 
-          grade: "Erro na IA",
-          details: []
+          grade: `0/${totalQuestoes}`,
+          details: invalidDetails // Usa os 'details' falsos
         });
       }
       
@@ -382,16 +388,14 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
 }
 
 // ==========================================================
-// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (ATUALIZADO)
+// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (Inalterado)
 // ==========================================================
 app.post("/start-verification", 
-  // O 'teacherKey' (PDF) foi removido do upload
   upload.fields([
       { name: 'studentSheet', maxCount: 40 } 
   ]), 
   (req, res) => {
     
-    // O 'gabarito' agora vem do 'req.body' (o campo de texto)
     const { gabarito } = req.body;
 
     if (!req.files || !req.files.studentSheet) {
@@ -421,7 +425,6 @@ app.post("/start-verification",
 
     console.log(`[JOB ${jobId}] Verificação criada. Iniciando em segundo plano...`);
 
-    // Chama a função pesada SEM 'await' e passa o gabarito
     corrigirProvas(jobId, studentSheetFiles, gabarito);
 
     res.status(202).json({ jobId: jobId });
@@ -430,7 +433,7 @@ app.post("/start-verification",
 
 
 // ================================
-// 6️⃣ INICIALIZAÇÃO DO SERVIDOR (Renumerado)
+// 6️⃣ INICIALIZAÇÃO DO SERVIDOR
 // ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
