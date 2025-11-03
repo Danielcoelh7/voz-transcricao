@@ -15,7 +15,7 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 const app = express();
 const upload = multer({ dest: "uploads/" }); 
 app.use(cors());
-app.use(express.json())
+app.use(express.json()); // Middleware para JSON
 
 // ==========================
 // Configuração da API Gemini
@@ -26,22 +26,28 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // ==========================
 // BANCO DE MEMÓRIA (JOBS)
 // ==========================
+// Este objeto único controlará TODOS os jobs
 const jobs = {};
 
 // ==========================
-// Função auxiliar: fileToGenerativePart (Inalterada)
+// Função auxiliar: fileToGenerativePart
 // ==========================
 function fileToGenerativePart(path, mimeType) {
-  return {
-    inlineData: {
-      data: Buffer.from(fs.readFileSync(path)).toString("base64"),
-      mimeType,
-    },
-  };
+  try {
+    return {
+      inlineData: {
+        data: Buffer.from(fs.readFileSync(path)).toString("base64"),
+        mimeType,
+      },
+    };
+  } catch (e) {
+    console.error(`Erro ao ler arquivo ${path}: ${e.message}`);
+    throw new Error(`Erro ao ler arquivo: ${path}`);
+  }
 }
 
 // ==========================
-// Função: selecionarModeloDisponivel (Inalterada)
+// Função: selecionarModeloDisponivel
 // ==========================
 async function selecionarModeloDisponivel() {
   const modelosPreferidos = [
@@ -73,21 +79,27 @@ async function selecionarModeloDisponivel() {
 // 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Inalterado)
 // ==========================================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
-  // ... (código de transcrição inalterado) ...
   if (!req.file) {
     console.error("[ERRO] Nenhum arquivo recebido.");
     return res.status(400).json({ error: "Nenhum arquivo de áudio enviado." });
   }
+
   const jobId = uuidv4();
   const filePath = req.file.path;
   const outputDir = `uploads/${jobId}`;
+
   console.log(`[JOB ${jobId}] Iniciado. Arquivo: ${filePath}`);
+
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
+
   res.status(202).json({ jobId });
+
   jobs[jobId] = { status: "splitting", progress: 0 };
+
   console.log(`[JOB ${jobId}] Dividindo o áudio com FFmpeg...`);
+
   ffmpeg(filePath)
     .outputOptions(["-f segment", "-segment_time 120", "-c copy"])
     .output(`${outputDir}/chunk_%03d.mp3`)
@@ -96,8 +108,17 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       jobs[jobId].status = "processing";
       const chunkFiles = fs.readdirSync(outputDir).sort();
       console.log(`[JOB ${jobId}] ${chunkFiles.length} partes encontradas.`);
+
       let fullTranscription = [];
-      const model = await selecionarModeloDisponivel();
+      let model;
+      try {
+        model = await selecionarModeloDisponivel();
+      } catch (modelError) {
+        console.error(`[JOB ${jobId}] Falha fatal:`, modelError.message);
+        jobs[jobId] = { status: "failed", error: modelError.message };
+        return; // Aborta a função 'on("end")'
+      }
+
       for (let i = 0; i < chunkFiles.length; i++) {
         const chunkPath = `${outputDir}/${chunkFiles[i]}`;
         try {
@@ -114,12 +135,14 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
           fullTranscription.push(`[ERRO NA TRANSCRIÇÃO DO TRECHO ${i + 1}]`);
         }
       }
+
       console.log(`[JOB ${jobId}] Transcrição completa.`);
       const fullText = fullTranscription.join(" ");
       console.log(`[JOB ${jobId}] Formatando perguntas...`);
       const regex = /(pergunta)(\s+)(.*?)(\s+)(ponto)/gi;
       const replacement = '$1$2($3)$4$5';
       const formattedText = fullText.replace(regex, replacement);
+
       try {
         jobs[jobId].status = "summarizing";
         console.log(`[JOB ${jobId}] Gerando resumo em tópicos...`);
@@ -150,6 +173,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
           progress: 100,
         };
       }
+
       console.log(`[JOB ${jobId}] Limpando arquivos temporários.`);
       fs.rmSync(outputDir, { recursive: true, force: true });
       fs.unlinkSync(filePath);
@@ -164,7 +188,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
 });
 
 // ==========================================================
-// 2️⃣ ENDPOINT DE STATUS (Inalterado e Universal)
+// 2️⃣ ENDPOINT DE STATUS (Universal)
 // ==========================================================
 app.get("/status/:jobId", (req, res) => {
   const { jobId } = req.params;
@@ -176,10 +200,9 @@ app.get("/status/:jobId", (req, res) => {
 });
 
 // ==========================================================
-// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES (Inalterado)
+// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES
 // ==========================================================
 app.post("/generate-activity", async (req, res) => {
-    // ... (código de gerar atividade inalterado) ...
     const { summaryText, options } = req.body;
     if (!summaryText || !options) {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
@@ -235,10 +258,9 @@ app.post("/generate-activity", async (req, res) => {
 
 
 // ==========================================================
-// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Inalterada)
+// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA)
 // ==========================================================
 async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
-  // ... (código de corrigirProvas inalterado) ...
   const job = jobs[jobId]; 
   const tempFilePaths = []; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
@@ -355,7 +377,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
 }
 
 // ==========================================================
-// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (MÚLT. ESCOLHA) (Inalterado)
+// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (MÚLT. ESCOLHA)
 // ==========================================================
 app.post("/start-verification", 
   upload.fields([
@@ -368,22 +390,28 @@ app.post("/start-verification",
     if (!req.files || !req.files.studentSheet) {
       return res.status(400).json({ error: "É necessário enviar pelo menos uma imagem do aluno." });
     }
+    
     if (!gabarito || gabarito.trim() === "") {
       return res.status(400).json({ error: "É necessário enviar o gabarito (ex: A,B,C)." });
     }
+    
     const studentSheetFiles = Array.isArray(req.files.studentSheet) 
         ? req.files.studentSheet 
         : [req.files.studentSheet];
+
     if (studentSheetFiles.length === 0) {
       return res.status(400).json({ error: "Nenhuma imagem de aluno foi enviada." });
     }
+
     const jobId = uuidv4();
+
     jobs[jobId] = {
       status: "processing",
       progress: 0,
       message: "Iniciando verificação...",
       results: null
     };
+
     console.log(`[JOB ${jobId}] Verificação (Múlt. Escolha) criada. Iniciando em segundo plano...`);
     corrigirProvas(jobId, studentSheetFiles, gabarito);
     res.status(202).json({ jobId: jobId });
@@ -391,7 +419,7 @@ app.post("/start-verification",
 );
 
 // ==========================================================
-// 6️⃣ NOVA FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO)
+// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO)
 // ==========================================================
 async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, criterios, notaMaxima) {
   const job = jobs[jobId]; 
@@ -399,12 +427,12 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
 
   const generationConfig = {
-      temperature: 0.3, // Um pouco mais criativo para feedback
+      temperature: 0.3, 
   };
   const results = [];
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); // Usar 1.5-flash ou pro para tarefas complexas
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção DISSERTATIVA de ${totalImagens} imagens.`);
@@ -418,7 +446,6 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
       job.message = `Corrigindo prova ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // O novo prompt para dissertativa
       const dissertativaPrompt = `
         TAREFA: Você é um professor assistente. Sua tarefa é corrigir a prova dissertativa de um aluno contida em uma IMAGEM.
 
@@ -435,7 +462,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
         5.  Escreva um FEEDBACK detalhado, explicando por que o aluno tirou essa nota, o que ele acertou, e o que faltou de acordo com o GABARITO e os CRITÉRIOS.
 
         FORMATO DE SAÍDA:
-        Responda APENAS com um objeto JSON válido. Não inclua markdown (```json) ou qualquer outro texto.
+        Responda APENAS com um objeto JSON válido. Não inclua markdown (como \`\`\`json) ou qualquer outro texto.
         
         {
           "nota": 8.5,
@@ -444,7 +471,6 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
       `;
 
       try {
-        // Envia o prompt e a imagem (sem gabarito em PDF)
         const result = await model.generateContent(
           [dissertativaPrompt, studentImagePart],
           generationConfig
@@ -465,7 +491,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
           console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${aiResponse.nota}`);
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
-            nota: aiResponse.nota.toString(), // Converte para string para consistência
+            nota: aiResponse.nota.toString(),
             feedback: aiResponse.feedback 
           });
         } else {
@@ -481,10 +507,9 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
         });
       }
       
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay maior para tarefas complexas
+      await new Promise(resolve => setTimeout(resolve, 2000));
     } // Fim do loop for
 
-    // --- FINALIZA O JOB COM SUCESSO ---
     console.log(`[JOB ${jobId}] Processamento dissertativo concluído.`);
     const finalResultsPayload = { results: results }; 
     job.status = "completed";
@@ -493,12 +518,10 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
     job.results = finalResultsPayload;
 
   } catch (error) {
-    // --- FINALIZA O JOB COM FALHA ---
     console.error(`[JOB ${jobId}] Erro geral:`, error.message);
     job.status = "failed";
     job.error = error.message || "Ocorreu um erro geral ao corrigir as provas.";
   } finally {
-    // --- LIMPEZA DE ARQUIVOS ---
     console.log(`[JOB ${jobId}] Limpando arquivos temporários...`);
     tempFilePaths.forEach(path => {
       try {
@@ -516,7 +539,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
 // ==========================================================
 app.post("/start-dissertativa-correction", 
   upload.fields([
-      { name: 'studentSheet', maxCount: 40 } // Apenas as imagens do aluno
+      { name: 'studentSheet', maxCount: 40 } 
   ]), 
   (req, res) => {
     
@@ -565,4 +588,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
-
