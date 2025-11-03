@@ -271,7 +271,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-pro" }); 
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
@@ -588,4 +588,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
