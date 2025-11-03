@@ -235,57 +235,43 @@ app.post("/generate-activity", async (req, res) => {
 
 
 // ==========================================================
-// 4️⃣ FUNÇÃO DE CORREÇÃO EM SEGUNDO PLANO (ATUALIZADA E CORRIGIDA)
+// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Inalterada)
 // ==========================================================
 async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
+  // ... (código de corrigirProvas inalterado) ...
   const job = jobs[jobId]; 
   const tempFilePaths = []; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
-
-  const generationConfig = {
-      temperature: 0.1, 
-  };
+  const generationConfig = { temperature: 0.1 };
   const results = [];
-
   const gabaritoArray = gabaritoString.split(',').map(s => s.trim().toUpperCase());
   const totalQuestoes = gabaritoArray.length;
-  // Cria um array de 'details' FALSOS para o caso de a prova ser invalidada
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
-
 
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
-    
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
-
       const percent = Math.round(((i + 1) / totalImagens) * 95); 
       job.progress = percent;
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // ==========================================================
-      // <<< MUDANÇA 1: O NOVO PROMPT (SIMPLIFICADO) >>>
-      // ==========================================================
-      // Pede APENAS os 'details'. A IA não é mais responsável pela 'grade'.
       const singleImagePrompt = `
-        TASK: Analyze a student's answer sheet image against a provided answer key.
-
+        TASK: Grade a student's answer sheet image using a provided answer key.
         INPUTS:
         1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
         2.  IMAGE file: The student's filled-in answer sheet.
-
         INSTRUCTIONS:
         1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
         2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
         3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
         4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
         5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list of true/false for each question.
-
         OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
         
         **If a RED 'X' is found (Invalidated):**
@@ -311,10 +297,6 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
           generationConfig
         );
         const fullResponseText = result.response.text();
-
-        // ==========================================================
-        // <<< MUDANÇA 2: A NOVA LÓGICA DE CÁLCULO >>>
-        // ==========================================================
         let aiResponse;
         try {
             const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -325,43 +307,185 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
             throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
         }
 
-        // Verifica se a IA retornou os 'details'
         if (aiResponse && aiResponse.details) {
-          
-          // --- NOSSO CÓDIGO FAZ A LÓGICA ---
-          // 1. Conta os acertos
           const correctCount = aiResponse.details.filter(d => d.correct).length;
-          // 2. Cria a string da nota
           const gradeString = `${correctCount}/${totalQuestoes}`;
-          // --- FIM DA LÓGICA ---
-
           console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${gradeString}`);
-          
-          // Salva os dados corretos (nota calculada + detalhes da IA)
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
-            grade: gradeString, // <-- A nossa nota (lógica)
-            details: aiResponse.details // <-- Os detalhes da IA (visual)
+            grade: gradeString,
+            details: aiResponse.details || [] 
           });
-
         } else {
           throw new Error(`A IA não retornou um JSON com a propriedade 'details' para a imagem ${studentFile.originalname}.`);
+        }
+      } catch (imageError) {
+        console.error(`[JOB ${jobId}] Erro ao processar a imagem ${studentFile.originalname}:`, imageError.message);
+        results.push({ 
+          fileName: studentFile.originalname || studentFile.filename, 
+          grade: `0/${totalQuestoes}`,
+          details: invalidDetails
+        });
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000)); 
+    } 
+
+    console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
+    const finalResultsPayload = { results: results }; 
+    job.status = "completed";
+    job.progress = 100;
+    job.message = "Correção concluída!";
+    job.results = finalResultsPayload;
+
+  } catch (error) {
+    console.error(`[JOB ${jobId}] Erro geral:`, error.message);
+    job.status = "failed";
+    job.error = error.message || "Ocorreu um erro geral ao corrigir as atividades.";
+  } finally {
+    console.log(`[JOB ${jobId}] Limpando arquivos temporários...`);
+    tempFilePaths.forEach(path => {
+      try {
+        if (fs.existsSync(path)) fs.unlinkSync(path);
+      } catch (err) {
+        console.error(`Erro ao limpar arquivo temporário ${path}:`, err);
+      }
+    });
+    console.log(`[JOB ${jobId}] Limpeza concluída.`);
+  }
+}
+
+// ==========================================================
+// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (MÚLT. ESCOLHA) (Inalterado)
+// ==========================================================
+app.post("/start-verification", 
+  upload.fields([
+      { name: 'studentSheet', maxCount: 40 } 
+  ]), 
+  (req, res) => {
+    
+    const { gabarito } = req.body;
+
+    if (!req.files || !req.files.studentSheet) {
+      return res.status(400).json({ error: "É necessário enviar pelo menos uma imagem do aluno." });
+    }
+    if (!gabarito || gabarito.trim() === "") {
+      return res.status(400).json({ error: "É necessário enviar o gabarito (ex: A,B,C)." });
+    }
+    const studentSheetFiles = Array.isArray(req.files.studentSheet) 
+        ? req.files.studentSheet 
+        : [req.files.studentSheet];
+    if (studentSheetFiles.length === 0) {
+      return res.status(400).json({ error: "Nenhuma imagem de aluno foi enviada." });
+    }
+    const jobId = uuidv4();
+    jobs[jobId] = {
+      status: "processing",
+      progress: 0,
+      message: "Iniciando verificação...",
+      results: null
+    };
+    console.log(`[JOB ${jobId}] Verificação (Múlt. Escolha) criada. Iniciando em segundo plano...`);
+    corrigirProvas(jobId, studentSheetFiles, gabarito);
+    res.status(202).json({ jobId: jobId });
+  }
+);
+
+// ==========================================================
+// 6️⃣ NOVA FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO)
+// ==========================================================
+async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, criterios, notaMaxima) {
+  const job = jobs[jobId]; 
+  const tempFilePaths = []; 
+  studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
+
+  const generationConfig = {
+      temperature: 0.3, // Um pouco mais criativo para feedback
+  };
+  const results = [];
+
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Usar 1.5-flash ou pro para tarefas complexas
+    
+    const totalImagens = studentSheetFiles.length;
+    console.log(`[JOB ${jobId}] Iniciando correção DISSERTATIVA de ${totalImagens} imagens.`);
+
+    for (let i = 0; i < totalImagens; i++) {
+      const studentFile = studentSheetFiles[i];
+      const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
+
+      const percent = Math.round(((i + 1) / totalImagens) * 95); 
+      job.progress = percent;
+      job.message = `Corrigindo prova ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
+      console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
+
+      // O novo prompt para dissertativa
+      const dissertativaPrompt = `
+        TAREFA: Você é um professor assistente. Sua tarefa é corrigir a prova dissertativa de um aluno contida em uma IMAGEM.
+
+        CONTEXTO:
+        1.  **GABARITO (RESPOSTA ESPERADA):** """${gabarito}"""
+        2.  **CRITÉRIOS DE AVALIAÇÃO (OBSERVAÇÕES):** """${criterios}"""
+        3.  **NOTA MÁXIMA:** ${notaMaxima}
+
+        INSTRUÇÕES:
+        1.  Leia e entenda o GABARITO e os CRITÉRIOS.
+        2.  Leia a resposta do aluno na IMAGEM.
+        3.  Compare a resposta do aluno com o GABARITO, aplicando os CRITÉRIOS.
+        4.  Decida uma NOTA para o aluno, de 0 a ${notaMaxima}. A nota pode ser um número decimal (ex: 8.5).
+        5.  Escreva um FEEDBACK detalhado, explicando por que o aluno tirou essa nota, o que ele acertou, e o que faltou de acordo com o GABARITO e os CRITÉRIOS.
+
+        FORMATO DE SAÍDA:
+        Responda APENAS com um objeto JSON válido. Não inclua markdown (```json) ou qualquer outro texto.
+        
+        {
+          "nota": 8.5,
+          "feedback": "O aluno demonstrou boa compreensão do Tópico 1, como pedido nos critérios. No entanto, a explicação sobre o Tópico 2 foi incompleta e não citou os exemplos do gabarito, por isso a nota não foi máxima."
+        }
+      `;
+
+      try {
+        // Envia o prompt e a imagem (sem gabarito em PDF)
+        const result = await model.generateContent(
+          [dissertativaPrompt, studentImagePart],
+          generationConfig
+        );
+        const fullResponseText = result.response.text();
+
+        let aiResponse;
+        try {
+            const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
+            aiResponse = JSON.parse(cleanedText);
+        } catch (e) {
+            console.error(`[JOB ${jobId}] Erro ao parsear JSON da IA para ${studentFile.originalname}:`, e.message);
+            console.error("Texto recebido da IA:", fullResponseText);
+            throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
+        }
+
+        if (aiResponse && aiResponse.nota !== undefined && aiResponse.feedback) {
+          console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${aiResponse.nota}`);
+          results.push({ 
+            fileName: studentFile.originalname || studentFile.filename, 
+            nota: aiResponse.nota.toString(), // Converte para string para consistência
+            feedback: aiResponse.feedback 
+          });
+        } else {
+          throw new Error(`A IA não retornou um JSON com 'nota' e 'feedback' para a imagem ${studentFile.originalname}.`);
         }
         
       } catch (imageError) {
         console.error(`[JOB ${jobId}] Erro ao processar a imagem ${studentFile.originalname}:`, imageError.message);
         results.push({ 
           fileName: studentFile.originalname || studentFile.filename, 
-          grade: `0/${totalQuestoes}`,
-          details: invalidDetails // Usa os 'details' falsos
+          nota: "Erro",
+          feedback: `A IA falhou ao processar esta imagem.\n${imageError.message}`
         });
       }
       
-      await new Promise(resolve => setTimeout(resolve, 1000)); 
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay maior para tarefas complexas
     } // Fim do loop for
 
     // --- FINALIZA O JOB COM SUCESSO ---
-    console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
+    console.log(`[JOB ${jobId}] Processamento dissertativo concluído.`);
     const finalResultsPayload = { results: results }; 
     job.status = "completed";
     job.progress = 100;
@@ -372,7 +496,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
     // --- FINALIZA O JOB COM FALHA ---
     console.error(`[JOB ${jobId}] Erro geral:`, error.message);
     job.status = "failed";
-    job.error = error.message || "Ocorreu um erro geral ao corrigir as atividades.";
+    job.error = error.message || "Ocorreu um erro geral ao corrigir as provas.";
   } finally {
     // --- LIMPEZA DE ARQUIVOS ---
     console.log(`[JOB ${jobId}] Limpando arquivos temporários...`);
@@ -388,22 +512,23 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
 }
 
 // ==========================================================
-// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (Inalterado)
+// 7️⃣ NOVO ENDPOINT: INICIAR CORREÇÃO DISSERTATIVA
 // ==========================================================
-app.post("/start-verification", 
+app.post("/start-dissertativa-correction", 
   upload.fields([
-      { name: 'studentSheet', maxCount: 40 } 
+      { name: 'studentSheet', maxCount: 40 } // Apenas as imagens do aluno
   ]), 
   (req, res) => {
     
-    const { gabarito } = req.body;
+    // Pega os dados do formulário de texto
+    const { gabaritoDissertativo, criteriosAvaliacao, notaMaxima } = req.body;
 
     if (!req.files || !req.files.studentSheet) {
       return res.status(400).json({ error: "É necessário enviar pelo menos uma imagem do aluno." });
     }
     
-    if (!gabarito || gabarito.trim() === "") {
-      return res.status(400).json({ error: "É necessário enviar o gabarito (ex: A,B,C)." });
+    if (!gabaritoDissertativo || !criteriosAvaliacao || !notaMaxima) {
+      return res.status(400).json({ error: "Por favor, preencha o gabarito, os critérios e a nota máxima." });
     }
     
     const studentSheetFiles = Array.isArray(req.files.studentSheet) 
@@ -419,13 +544,14 @@ app.post("/start-verification",
     jobs[jobId] = {
       status: "processing",
       progress: 0,
-      message: "Iniciando verificação...",
+      message: "Iniciando correção dissertativa...",
       results: null
     };
 
-    console.log(`[JOB ${jobId}] Verificação criada. Iniciando em segundo plano...`);
+    console.log(`[JOB ${jobId}] Correção DISSERTATIVA criada. Iniciando em segundo plano...`);
 
-    corrigirProvas(jobId, studentSheetFiles, gabarito);
+    // Chama a nova função em segundo plano
+    corrigirProvasDissertativas(jobId, studentSheetFiles, gabaritoDissertativo, criteriosAvaliacao, notaMaxima);
 
     res.status(202).json({ jobId: jobId });
   }
@@ -433,7 +559,7 @@ app.post("/start-verification",
 
 
 // ================================
-// 6️⃣ INICIALIZAÇÃO DO SERVIDOR
+// 8️⃣ INICIALIZAÇÃO DO SERVIDOR
 // ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
