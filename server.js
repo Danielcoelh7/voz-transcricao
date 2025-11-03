@@ -404,7 +404,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
   const results = [];
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Usar 1.5-flash ou pro para tarefas complexas
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); // Usar 1.5-flash ou pro para tarefas complexas
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção DISSERTATIVA de ${totalImagens} imagens.`);
@@ -565,3 +565,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
