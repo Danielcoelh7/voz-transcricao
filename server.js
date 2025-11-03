@@ -26,7 +26,6 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // ==========================
 // BANCO DE MEMÓRIA (JOBS)
 // ==========================
-// Este objeto único controlará TODOS os jobs
 const jobs = {};
 
 // ==========================
@@ -47,36 +46,13 @@ function fileToGenerativePart(path, mimeType) {
 }
 
 // ==========================
-// Função: selecionarModeloDisponivel
+// Função: selecionarModeloDisponivel (REMOVIDA)
 // ==========================
-async function selecionarModeloDisponivel() {
-  const modelosPreferidos = [
-    "gemini-2.0-flash",
-    "gemini-2.0-pro",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash",
-  ];
+// Vamos usar "gemini-2.0-flash" diretamente, pois é o único que funciona na sua API.
 
-  for (const nomeModelo of modelosPreferidos) {
-    try {
-      console.log(`[INFO] Testando modelo: ${nomeModelo}...`);
-      const model = genAI.getGenerativeModel({ model: nomeModelo });
-      const result = await model.generateContent("Teste de disponibilidade do modelo.");
-      if (result?.response) {
-        console.log(`[SUCESSO] Modelo disponível: ${nomeModelo}`);
-        return model;
-      }
-    } catch (err) {
-      const code = err?.status || err?.statusCode || err?.code;
-      console.warn(`[ERRO] Modelo ${nomeModelo} falhou (${code || err.message}). Tentando o próximo...`);
-      if (code === 429 || code === 503) continue;
-    }
-  }
-  throw new Error("Nenhum modelo Gemini disponível no momento.");
-}
 
 // ==========================================================
-// 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Inalterado)
+// 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Atualizado)
 // ==========================================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
   if (!req.file) {
@@ -95,9 +71,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
   }
 
   res.status(202).json({ jobId });
-
   jobs[jobId] = { status: "splitting", progress: 0 };
-
   console.log(`[JOB ${jobId}] Dividindo o áudio com FFmpeg...`);
 
   ffmpeg(filePath)
@@ -112,11 +86,12 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       let fullTranscription = [];
       let model;
       try {
-        model = await selecionarModeloDisponivel();
+        // MUDANÇA: Usando o modelo "flash" diretamente
+        model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
       } catch (modelError) {
         console.error(`[JOB ${jobId}] Falha fatal:`, modelError.message);
         jobs[jobId] = { status: "failed", error: modelError.message };
-        return; // Aborta a função 'on("end")'
+        return;
       }
 
       for (let i = 0; i < chunkFiles.length; i++) {
@@ -154,7 +129,8 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
         Texto:
         """${formattedText}""" 
         `;
-        const summaryModel = await selecionarModeloDisponivel();
+        // MUDANÇA: Usando o modelo "flash" diretamente
+        const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const summaryResult = await summaryModel.generateContent(summaryPrompt);
         const summaryText = summaryResult.response.text();
         jobs[jobId] = {
@@ -200,13 +176,14 @@ app.get("/status/:jobId", (req, res) => {
 });
 
 // ==========================================================
-// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES
+// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES (Atualizado)
 // ==========================================================
 app.post("/generate-activity", async (req, res) => {
     const { summaryText, options } = req.body;
     if (!summaryText || !options) {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
     }
+    // ... (lógica do prompt inalterada) ...
     let prompt = `Com base no resumo: "${summaryText}".\nElabore uma atividade escolar no nível ${options.difficulty} seguindo as regras:\n`;
     if (options.type === "dissertativa") {
          prompt += `- Crie exatamente ${options.quantity} questões dissertativas.\n- As perguntas devem incentivar o pensamento crítico.`;
@@ -230,9 +207,11 @@ app.post("/generate-activity", async (req, res) => {
              prompt += `- **IMPORTANTE: No final de TUDO, adicione as respostas corretas em uma linha separada, formatada EXATAMENTE assim: GABARITO:[A,B,D,C,...] (uma letra para cada questão)**\n`;
          }
      }
+    
     console.log(`[JOB ATIVIDADE] Gerando atividade do tipo "${options.type}" (${options.questionType || ''})...`);
     try {
-        const model = await selecionarModeloDisponivel();
+        // MUDANÇA: Usando o modelo "flash" diretamente
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const result = await model.generateContent(prompt);
         const fullResponseText = result.response.text();
         let activityText = fullResponseText;
@@ -258,7 +237,7 @@ app.post("/generate-activity", async (req, res) => {
 
 
 // ==========================================================
-// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA)
+// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Atualizada)
 // ==========================================================
 async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const job = jobs[jobId]; 
@@ -271,7 +250,9 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-pro" }); 
+    // MUDANÇA: Usando o modelo "flash" que nós sabemos que funciona
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
@@ -283,10 +264,11 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
+      // Este é o prompt que pede SÓ os detalhes
       const singleImagePrompt = `
         TASK: Grade a student's answer sheet image using a provided answer key.
         INPUTS:
-        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
+        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"] (Q1 is "${gabaritoArray[0]}", Q2 is "${gabaritoArray[1]}", etc.)
         2.  IMAGE file: The student's filled-in answer sheet.
         INSTRUCTIONS:
         1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
@@ -329,14 +311,15 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
             throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
         }
 
+        // A LÓGICA QUE CORRIGE A INCONSISTÊNCIA ESTÁ AQUI
         if (aiResponse && aiResponse.details) {
           const correctCount = aiResponse.details.filter(d => d.correct).length;
           const gradeString = `${correctCount}/${totalQuestoes}`;
           console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${gradeString}`);
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
-            grade: gradeString,
-            details: aiResponse.details || [] 
+            grade: gradeString, // Nota calculada pelo backend
+            details: aiResponse.details // Detalhes da IA
           });
         } else {
           throw new Error(`A IA não retornou um JSON com a propriedade 'details' para a imagem ${studentFile.originalname}.`);
@@ -419,7 +402,7 @@ app.post("/start-verification",
 );
 
 // ==========================================================
-// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO)
+// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO) (Atualizada)
 // ==========================================================
 async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, criterios, notaMaxima) {
   const job = jobs[jobId]; 
@@ -432,6 +415,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
   const results = [];
 
   try {
+    // MUDANÇA: Usando o modelo "flash" diretamente
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
     
     const totalImagens = studentSheetFiles.length;
@@ -543,7 +527,6 @@ app.post("/start-dissertativa-correction",
   ]), 
   (req, res) => {
     
-    // Pega os dados do formulário de texto
     const { gabaritoDissertativo, criteriosAvaliacao, notaMaxima } = req.body;
 
     if (!req.files || !req.files.studentSheet) {
@@ -573,7 +556,6 @@ app.post("/start-dissertativa-correction",
 
     console.log(`[JOB ${jobId}] Correção DISSERTATIVA criada. Iniciando em segundo plano...`);
 
-    // Chama a nova função em segundo plano
     corrigirProvasDissertativas(jobId, studentSheetFiles, gabaritoDissertativo, criteriosAvaliacao, notaMaxima);
 
     res.status(202).json({ jobId: jobId });
@@ -588,5 +570,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
-
-
