@@ -42,14 +42,27 @@ function fileToGenerativePart(path, mimeType) {
     };
   } catch (e) {
     console.error(`Erro ao ler arquivo ${path}: ${e.message}`);
+    // Se o arquivo já foi deletado por outro processo, não quebre
+    if (e.code === 'ENOENT') {
+      return null; // Retorna nulo para ser filtrado depois
+    }
     throw new Error(`Erro ao ler arquivo: ${path}`);
   }
 }
 
 // ==========================
-// Função: selecionarModeloDisponivel (REMOVIDA)
+// Função: selecionarModeloDisponivel (SIMPLIFICADA)
 // ==========================
-// Vamos usar "gemini-2.0-flash" diretamente, pois é o único que funciona na sua API.
+// Vamos usar "gemini-2.0-flash" pois sabemos que é o que sua chave suporta.
+function getModel() {
+    try {
+        // Tenta pegar o modelo que sabemos que funciona
+        return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    } catch (err) {
+        console.error("[ERRO FATAL] Não foi possível carregar o modelo 'gemini-2.0-flash'.", err.message);
+        throw new Error("Não foi possível carregar o modelo de IA.");
+    }
+}
 
 
 // ==========================================================
@@ -89,8 +102,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       let fullTranscription = [];
       let model;
       try {
-        // MUDANÇA: Usando o modelo "flash" diretamente
-        model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        model = getModel(); // Usa o modelo flash
       } catch (modelError) {
         console.error(`[JOB ${jobId}] Falha fatal:`, modelError.message);
         jobs[jobId] = { status: "failed", error: modelError.message };
@@ -102,6 +114,8 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
         try {
           console.log(`[JOB ${jobId}] Transcrevendo ${chunkFiles[i]}...`);
           const audioPart = fileToGenerativePart(chunkPath, "audio/mp3");
+          if (!audioPart) continue; // Pula se o arquivo não pôde ser lido
+          
           const prompt = "Transcreva o áudio a seguir na íntegra, sem comentários.";
           const result = await model.generateContent([prompt, audioPart]);
           const text = result.response.text();
@@ -132,8 +146,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
         Texto:
         """${formattedText}""" 
         `;
-        // MUDANÇA: Usando o modelo "flash" diretamente
-        const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const summaryModel = getModel(); // Usa o modelo flash
         const summaryResult = await summaryModel.generateContent(summaryPrompt);
         const summaryText = summaryResult.response.text();
         jobs[jobId] = {
@@ -154,14 +167,18 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       }
 
       console.log(`[JOB ${jobId}] Limpando arquivos temporários.`);
-      fs.rmSync(outputDir, { recursive: true, force: true });
-      fs.unlinkSync(filePath);
+      try {
+        fs.rmSync(outputDir, { recursive: true, force: true });
+        fs.unlinkSync(filePath);
+      } catch(e) { console.error(`[JOB ${jobId}] Erro ao limpar arquivos: ${e.message}`); }
     })
     .on("error", (err) => {
       console.error(`[JOB ${jobId}] [FFmpeg] ERRO:`, err.message);
       jobs[jobId] = { status: "failed", error: "Erro ao dividir o áudio." };
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
+      try {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
+      } catch(e) { console.error(`[JOB ${jobId}] Erro ao limpar arquivos pós-falha: ${e.message}`); }
     })
     .run();
 });
@@ -179,14 +196,13 @@ app.get("/status/:jobId", (req, res) => {
 });
 
 // ==========================================================
-// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES (Atualizado)
+// 3️⃣ ENDPOINT: GERADOR DE ATIVIDADES
 // ==========================================================
 app.post("/generate-activity", async (req, res) => {
     const { summaryText, options } = req.body;
     if (!summaryText || !options) {
         return res.status(400).json({ error: "Dados insuficientes para gerar a atividade." });
     }
-    // ... (lógica do prompt inalterada) ...
     let prompt = `Com base no resumo: "${summaryText}".\nElabore uma atividade escolar no nível ${options.difficulty} seguindo as regras:\n`;
     if (options.type === "dissertativa") {
          prompt += `- Crie exatamente ${options.quantity} questões dissertativas.\n- As perguntas devem incentivar o pensamento crítico.`;
@@ -213,8 +229,7 @@ app.post("/generate-activity", async (req, res) => {
     
     console.log(`[JOB ATIVIDADE] Gerando atividade do tipo "${options.type}" (${options.questionType || ''})...`);
     try {
-        // MUDANÇA: Usando o modelo "flash" diretamente
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = getModel(); // Usa o modelo flash
         const result = await model.generateContent(prompt);
         const fullResponseText = result.response.text();
         let activityText = fullResponseText;
@@ -244,30 +259,37 @@ app.post("/generate-activity", async (req, res) => {
 // ==========================================================
 async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
   const job = jobs[jobId]; 
-  const tempFilePaths = [teacherKeyFile.path]; // PDF está de volta
+  const tempFilePaths = [teacherKeyFile.path]; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
   const generationConfig = { temperature: 0.1 };
   const results = [];
 
   try {
-    // MUDANÇA: Usando o modelo "flash"
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    const model = getModel(); // Usa o modelo flash
     const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
+    // Se o PDF foi deletado (acontece em re-tentativas), falha aqui.
+    if (!teacherKeyPart) {
+        throw new Error("Arquivo PDF do gabarito não pôde ser lido.");
+    }
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens.`);
 
-    // Loop para processar cada imagem
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
+      // Se a imagem do aluno foi deletada
+      if (!studentImagePart) {
+          console.warn(`[JOB ${jobId}] Pulando imagem ${studentFile.originalname} (não pôde ser lida).`);
+          continue; 
+      }
 
       const percent = Math.round(((i + 1) / totalImagens) * 95); 
       job.progress = percent;
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // O prompt original que pede para a IA deduzir o gabarito do PDF
+      // Prompt que pede para a IA DEDUZIR o gabarito do PDF
       const singleImagePrompt = `
         TASK: Correct a student's answer sheet image based on an official answer key PDF, checking for an invalidation mark.
         INPUTS:
@@ -300,7 +322,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
 
       try {
         const result = await model.generateContent(
-          [singleImagePrompt, teacherKeyPart, studentImagePart], // PDF e Imagem
+          [singleImagePrompt, teacherKeyPart, studentImagePart], 
           generationConfig
         );
         const fullResponseText = result.response.text();
@@ -337,7 +359,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
           details: []
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay para o modelo flash
+      await new Promise(resolve => setTimeout(resolve, 2000)); 
     } 
 
     console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
@@ -369,7 +391,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
 // ==========================================================
 app.post("/start-verification", 
   upload.fields([
-      { name: 'teacherKey', maxCount: 1 }, // <-- PDF RESTAURADO
+      { name: 'teacherKey', maxCount: 1 }, // PDF
       { name: 'studentSheet', maxCount: 40 } 
   ]), 
   (req, res) => {
@@ -379,7 +401,7 @@ app.post("/start-verification",
       return res.status(400).json({ error: "É necessário enviar o PDF do professor e pelo menos uma imagem do aluno." });
     }
     
-    const teacherKeyFile = req.files.teacherKey[0]; // <-- RESTAURADO
+    const teacherKeyFile = req.files.teacherKey[0]; 
     const studentSheetFiles = Array.isArray(req.files.studentSheet) 
         ? req.files.studentSheet 
         : [req.files.studentSheet];
@@ -405,7 +427,7 @@ app.post("/start-verification",
 );
 
 // ==========================================================
-// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (Atualizada)
+// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO) (Atualizada)
 // ==========================================================
 async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, criterios, notaMaxima) {
   const job = jobs[jobId]; 
@@ -418,8 +440,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
   const results = [];
 
   try {
-    // MUDANÇA: Usando o modelo "flash"
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    const model = getModel(); // Usa o modelo flash
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção DISSERTATIVA de ${totalImagens} imagens.`);
@@ -427,6 +448,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
+      if (!studentImagePart) continue; // Pula se o arquivo não pôde ser lido
 
       const percent = Math.round(((i + 1) / totalImagens) * 95); 
       job.progress = percent;
@@ -520,7 +542,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
 }
 
 // ==========================================================
-// 7️⃣ ENDPOINT: INICIAR CORREÇÃO DISSERTATIVA (Inalterado)
+// 7️⃣ ENDPOINT: INICIAR CORREÇÃO DISSERTATIVA
 // ==========================================================
 app.post("/start-dissertativa-correction", 
   upload.fields([
