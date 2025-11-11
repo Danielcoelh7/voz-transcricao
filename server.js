@@ -87,10 +87,18 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
 
   console.log(`[JOB ${jobId}] Dividindo o áudio com FFmpeg...`);
 
+  // DEPOIS (O CÓDIGO NOVO E CORRETO)
   ffmpeg(filePath)
-    .outputOptions(["-f segment", "-segment_time 120", "-c copy"])
-    .output(`${outputDir}/chunk_%03d.mp3`)
+    .outputOptions([
+      "-f segment",         // 1. Diga que é para segmentar (dividir)
+      "-segment_time 120",    // 2. Divida a cada 120 segundos
+      "-acodec libmp3lame",   // 3. CONVERTA o áudio para o codec MP3 (essencial)
+      "-ab 128k",             // 4. Defina o bitrate (128k é ótimo para voz)
+      "-ar 44100"             // 5. Defina a taxa de amostragem (padrão)
+    ])
+    .output(`${outputDir}/chunk_%03d.mp3`) // 6. Salve os pedaços como .mp3
     .on("end", async () => {
+    // 
       console.log(`[JOB ${jobId}] Divisão concluída.`);
       jobs[jobId].status = "processing";
       const chunkFiles = fs.readdirSync(outputDir).sort();
@@ -585,3 +593,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
