@@ -49,16 +49,15 @@ function fileToGenerativePart(path, mimeType) {
 }
 
 // ==========================
-// Função: getModel (ATUALIZADA)
+// Função: getModel (Usa o modelo que funciona)
 // ==========================
-// Agora ela recebe o nome do modelo que queremos
-function getModel(modelName) {
+function getModel() {
     try {
-        console.log(`[INFO] Carregando modelo: ${modelName}`);
-        return genAI.getGenerativeModel({ model: modelName });
+        // Usando o modelo que sabemos que sua chave API suporta
+        return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     } catch (err) {
-        console.error(`[ERRO FATAL] Não foi possível carregar o modelo '${modelName}'.`, err.message);
-        throw new Error(`Não foi possível carregar o modelo de IA: ${modelName}`);
+        console.error("[ERRO FATAL] Não foi possível carregar o modelo 'gemini-2.0-flash'.", err.message);
+        throw new Error("Não foi possível carregar o modelo de IA.");
     }
 }
 
@@ -108,7 +107,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
       let fullTranscription = [];
       let model;
       try {
-        model = getModel("gemini-2.0-flash"); // <-- Usa o 2.0-flash
+        model = getModel();
       } catch (modelError) {
         console.error(`[JOB ${jobId}] Falha fatal:`, modelError.message);
         jobs[jobId] = { status: "failed", error: modelError.message };
@@ -152,7 +151,7 @@ app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
         Texto:
         """${formattedText}""" 
         `;
-        const summaryModel = getModel("gemini-2.0-flash"); // <-- Usa o 2.0-flash
+        const summaryModel = getModel();
         const summaryResult = await summaryModel.generateContent(summaryPrompt);
         const summaryText = summaryResult.response.text();
         jobs[jobId] = {
@@ -235,7 +234,7 @@ app.post("/generate-activity", async (req, res) => {
     
     console.log(`[JOB ATIVIDADE] Gerando atividade do tipo "${options.type}" (${options.questionType || ''})...`);
     try {
-        const model = getModel("gemini-2.0-flash"); // <-- Usa o 2.0-flash
+        const model = getModel();
         const result = await model.generateContent(prompt);
         const fullResponseText = result.response.text();
         let activityText = fullResponseText;
@@ -275,8 +274,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
   try {
-    // <<< MUDANÇA PRINCIPAL AQUI >>>
-    const model = getModel("gemini-1.5-flash"); // <-- Usa o 1.5-flash
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
@@ -443,7 +441,7 @@ async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, c
   const results = [];
 
   try {
-    const model = getModel("gemini-2.0-flash"); // <-- Usa o 2.0-flash
+    const model = getModel(); // Usa o modelo flash
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção DISSERTATIVA de ${totalImagens} imagens.`);
