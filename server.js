@@ -265,7 +265,11 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const job = jobs[jobId]; 
   const tempFilePaths = []; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
-  const generationConfig = { temperature: 0.1 };
+  const generationConfig = { 
+    temperature: 0.0, // ZERO para máxima precisão
+    topP: 0.95,
+    topK: 40
+  };
   const results = [];
 
   const gabaritoArray = gabaritoString.split(',').map(s => s.trim().toUpperCase());
@@ -273,9 +277,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
   try {
-    // <<< MUDANÇA PRINCIPAL AQUI >>>
-    // Força o uso do modelo 1.5-flash SÓ para esta função
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" }); // Tente o experimental
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
@@ -290,36 +292,50 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // ESTE É O PROMPT CORRETO (MEIO-TERMO)
+      // NOVO PROMPT - MUITO MAIS ESPECÍFICO
       const singleImagePrompt = `
-        TASK: Grade a student's answer sheet image using a provided answer key.
-        INPUTS:
-        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
-        2.  IMAGE file: The student's filled-in answer sheet.
-        INSTRUCTIONS:
-        1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
-        2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
-        3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
-        4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
-        5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list of true/false for each question.
-        OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
-        
-        **If a RED 'X' is found (Invalidated):**
-        {
-          "details": ${JSON.stringify(invalidDetails)},
-          "invalidated": true
-        }
+VOCÊ É UM SISTEMA DE CORREÇÃO AUTOMÁTICA DE PROVAS.
 
-        **If NO red 'X' is found (Valid Test):**
-        {
-          "details": [
-            { "q": 1, "correct": true_ou_false },
-            { "q": 2, "correct": true_ou_false },
-            ... (uma entrada para cada uma das ${totalQuestoes} questões)
-          ],
-          "invalidated": false
-        }
-      `;
+**GABARITO OFICIAL:**
+${gabaritoArray.map((letra, idx) => `Questão ${idx + 1}: ${letra}`).join('\n')}
+
+**SUA TAREFA:**
+1. Olhe a IMAGEM da prova do aluno com MUITA ATENÇÃO
+2. Para CADA questão (de 1 até ${totalQuestoes}), identifique qual alternativa o aluno marcou
+3. Uma marcação válida é: um X, um círculo preenchido, ou qualquer marca clara em UMA alternativa
+4. Se o aluno marcou MAIS DE UMA alternativa na mesma questão = ERRADO
+5. Se não há marca legível = ERRADO
+6. Se há um grande X VERMELHO na prova inteira = prova ANULADA
+
+**IMPORTANTE:**
+- Procure por marcações em CANETA, LÁPIS ou qualquer forma de preenchimento
+- Mesmo que a marcação seja leve ou pequena, se estiver APENAS em uma alternativa, considere
+- Compare a alternativa marcada pelo aluno com o gabarito oficial acima
+
+**VERIFICAÇÃO DE ANULAÇÃO:**
+Existe um grande X vermelho atravessando TODA a prova? (SIM ou NÃO)
+
+**FORMATO DE RESPOSTA:**
+Responda APENAS com JSON válido, sem markdown:
+
+Se NÃO há X vermelho (prova válida):
+{
+  "invalidated": false,
+  "details": [
+    {"q": 1, "studentAnswer": "A", "correctAnswer": "${gabaritoArray[0]}", "correct": true},
+    {"q": 2, "studentAnswer": "B", "correctAnswer": "${gabaritoArray[1]}", "correct": false},
+    ... (uma entrada para cada questão até ${totalQuestoes})
+  ]
+}
+
+Se HÁ X vermelho (prova anulada):
+{
+  "invalidated": true,
+  "details": ${JSON.stringify(invalidDetails)}
+}
+
+**RESPONDA AGORA:**
+`;
 
       try {
         const result = await model.generateContent(
@@ -327,6 +343,8 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
           generationConfig
         );
         const fullResponseText = result.response.text();
+        console.log(`[JOB ${jobId}] Resposta da IA para ${studentFile.originalname}:`, fullResponseText);
+        
         let aiResponse;
         try {
             const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -341,10 +359,13 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
           const correctCount = aiResponse.details.filter(d => d.correct).length;
           const gradeString = `${correctCount}/${totalQuestoes}`;
           console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${gradeString}`);
+          console.log(`[JOB ${jobId}] Detalhes:`, JSON.stringify(aiResponse.details, null, 2));
+          
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
             grade: gradeString,
-            details: aiResponse.details || [] 
+            details: aiResponse.details || [],
+            invalidated: aiResponse.invalidated || false
           });
         } else {
           throw new Error(`A IA não retornou um JSON com a propriedade 'details' para a imagem ${studentFile.originalname}.`);
@@ -354,10 +375,11 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
         results.push({ 
           fileName: studentFile.originalname || studentFile.filename, 
           grade: `0/${totalQuestoes}`,
-          details: invalidDetails
+          details: invalidDetails,
+          error: imageError.message
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Aumentei o delay
     } 
 
     console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
@@ -594,3 +616,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
