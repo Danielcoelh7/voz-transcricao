@@ -288,33 +288,39 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
 
       // ESTE É O PROMPT CORRETO (MEIO-TERMO)
       const singleImagePrompt = `
-        TASK: Grade a student's answer sheet image using a provided answer key.
-        INPUTS:
-        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
-        2.  IMAGE file: The student's filled-in answer sheet.
-        INSTRUCTIONS:
-        1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
-        2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
-        3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
-        4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
-        5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list of true/false for each question.
-        OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
-        
-        **If a RED 'X' is found (Invalidated):**
-        {
-          "details": ${JSON.stringify(invalidDetails)},
-          "invalidated": true
-        }
+        Você é um corretor automático de provas de múltipla escolha.
+A imagem enviada contém uma folha de respostas com círculos (bolinhas) para cada alternativa.
 
-        **If NO red 'X' is found (Valid Test):**
-        {
-          "details": [
-            { "q": 1, "correct": true_ou_false },
-            { "q": 2, "correct": true_ou_false },
-            ... (uma entrada para cada uma das ${totalQuestoes} questões)
-          ],
-          "invalidated": false
-        }
+🧾 **Descrição da folha:**
+- Cada questão é numerada de 1 a ${totalQuestoes}.
+- Cada linha contém 4 alternativas: A, B, C e D.
+- A alternativa escolhida está **com o círculo preenchido (preto)**.
+- Apenas uma bolinha deve ser considerada por questão.
+- As demais estão vazias (não preenchidas).
+
+🎯 **Sua tarefa:**
+1. Observe cuidadosamente a imagem.
+2. Identifique qual alternativa (A, B, C ou D) está marcada em cada questão.
+3. Compare as respostas com o gabarito a seguir:
+
+Gabarito oficial:
+${gabaritoArray.join(", ")}
+
+4. Gere o resultado em **JSON puro** no formato:
+
+{
+  "invalidated": false,
+  "details": [
+    { "q": 1, "aluno": "B", "correta": true },
+    { "q": 2, "aluno": "C", "correta": false },
+    ...
+  ]
+}
+
+⚠️ **Regras especiais:**
+- Se uma questão tiver mais de uma bolinha preenchida → "aluno": "?" e "correta": false.
+- Se estiver ilegível, use "aluno": "?".
+- Não adicione texto, markdown ou explicações.
       `;
 
       try {
@@ -591,4 +597,5 @@ app.listen(PORT, () => {
   // AQUI ESTÁ A CORREÇÃO FINAL - com crases (`)
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
