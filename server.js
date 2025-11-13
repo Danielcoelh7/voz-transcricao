@@ -271,7 +271,7 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   try {
     // <<< MUDANÇA PRINCIPAL AQUI >>>
     // Força o uso do modelo 1.5-flash SÓ para esta função
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); 
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
@@ -591,3 +591,4 @@ app.listen(PORT, () => {
   // AQUI ESTÁ A CORREÇÃO FINAL - com crases (`)
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
