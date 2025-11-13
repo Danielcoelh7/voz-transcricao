@@ -53,6 +53,7 @@ function fileToGenerativePart(path, mimeType) {
 // ==========================
 function getModel() {
     try {
+        // Usando o modelo que sabemos que sua chave API suporta
         return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     } catch (err) {
         console.error("[ERRO FATAL] Não foi possível carregar o modelo 'gemini-2.0-flash'.", err.message);
@@ -62,7 +63,7 @@ function getModel() {
 
 
 // ==========================================================
-// 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Usa o 2.0-flash)
+// 1️⃣ ENDPOINT DE TRANSCRIÇÃO (Atualizado)
 // ==========================================================
 app.post("/transcribe-chunked", upload.single("audio"), (req, res) => {
   if (!req.file) {
@@ -257,52 +258,55 @@ app.post("/generate-activity", async (req, res) => {
 
 
 // ==========================================================
-// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Usa 2.0-flash com PDF)
+// 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Gabarito em Texto)
 // ==========================================================
-async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
+async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const job = jobs[jobId]; 
-  const tempFilePaths = [teacherKeyFile.path]; 
+  const tempFilePaths = []; 
   studentSheetFiles.forEach(file => tempFilePaths.push(file.path));
   const generationConfig = { temperature: 0.1 };
   const results = [];
 
+  const gabaritoArray = gabaritoString.split(',').map(s => s.trim().toUpperCase());
+  const totalQuestoes = gabaritoArray.length;
+  const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
+
   try {
+    // <<< MUDANÇA PRINCIPAL AQUI >>>
+    // Força o uso do modelo 2.0-flash SÓ para esta função
+    // (já que o 1.5-flash não está funcionando para você)
     const model = getModel(); // <-- Usa o 2.0-flash
-    const teacherKeyPart = fileToGenerativePart(teacherKeyFile.path, teacherKeyFile.mimetype);
-    if (!teacherKeyPart) {
-        throw new Error("Arquivo PDF do gabarito não pôde ser lido.");
-    }
     
     const totalImagens = studentSheetFiles.length;
-    console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens.`);
+    console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
-      if (!studentImagePart) continue; 
+      if (!studentImagePart) continue;
 
       const percent = Math.round(((i + 1) / totalImagens) * 95); 
       job.progress = percent;
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // PROMPT ORIGINAL (PDF + Imagem)
+      // ESTE É O PROMPT CORRETO (MEIO-TERMO)
       const singleImagePrompt = `
-        TASK: Correct a student's answer sheet image based on an official answer key PDF, checking for an invalidation mark.
+        TASK: Grade a student's answer sheet image using a provided answer key.
         INPUTS:
-        1.  PDF file: Contains the questions, alternatives, and *is the source of truth* for the correct answers.
-        2.  IMAGE file: A photo of the student's filled-in answer sheet.
+        1.  ANSWER KEY (string array): ["${gabaritoArray.join('","')}"]
+        2.  IMAGE file: The student's filled-in answer sheet.
         INSTRUCTIONS:
-        1.  **DEDUCE KEY:** Read the PDF to determine the correct letter answer for each question number. Let 'Y' be the total number of questions. (e.g., 1-B, 2-D, 3-C...).
-        2.  **CHECK INVALIDATION:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
-        3.  **ANALYZE ANSWERS:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to Y).
+        1.  **Parse Key:** The correct answers are in the ANSWER KEY array. The first item is for Q1, second for Q2, etc. Total questions = ${totalQuestoes}.
+        2.  **Check Invalidation:** Look at the IMAGE. Is there a large, distinct 'X' mark in RED?
+        3.  **Analyze Answers:** If NO red 'X', analyze the IMAGE to see which letter (A, B, C, D) the student marked for each question (1 to ${totalQuestoes}).
         4.  **Handle Ambiguity:** If a student marked MORE THAN ONE option, or the mark is unreadable, count as INCORRECT.
         5.  **Compare & Detail:** Compare the student's marks to the ANSWER KEY. Create a "details" list of true/false for each question.
         OUTPUT FORMAT: Respond ONLY with a single, valid JSON object. Do not add markdown or any other text.
         
         **If a RED 'X' is found (Invalidated):**
         {
-          "details": [], 
+          "details": ${JSON.stringify(invalidDetails)},
           "invalidated": true
         }
 
@@ -311,7 +315,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
           "details": [
             { "q": 1, "correct": true_ou_false },
             { "q": 2, "correct": true_ou_false },
-            ... (uma entrada para cada uma das Y questões)
+            ... (uma entrada para cada uma das ${totalQuestoes} questões)
           ],
           "invalidated": false
         }
@@ -319,7 +323,7 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
 
       try {
         const result = await model.generateContent(
-          [singleImagePrompt, teacherKeyPart, studentImagePart], 
+          [singleImagePrompt, studentImagePart],
           generationConfig
         );
         const fullResponseText = result.response.text();
@@ -334,11 +338,8 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
         }
 
         if (aiResponse && aiResponse.details) {
-          // LÓGICA DE CONSISTÊNCIA: Backend calcula a nota
-          const totalQuestoes = aiResponse.details.length;
           const correctCount = aiResponse.details.filter(d => d.correct).length;
           const gradeString = `${correctCount}/${totalQuestoes}`;
-          
           console.log(`[JOB ${jobId}] Nota para ${studentFile.originalname}: ${gradeString}`);
           results.push({ 
             fileName: studentFile.originalname || studentFile.filename, 
@@ -352,11 +353,11 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
         console.error(`[JOB ${jobId}] Erro ao processar a imagem ${studentFile.originalname}:`, imageError.message);
         results.push({ 
           fileName: studentFile.originalname || studentFile.filename, 
-          grade: "Erro na IA",
-          details: []
+          grade: `0/${totalQuestoes}`,
+          details: invalidDetails
         });
       }
-      await new Promise(resolve => setTimeout(resolve, 2000)); 
+      await new Promise(resolve => setTimeout(resolve, 2000));
     } 
 
     console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
@@ -384,20 +385,25 @@ async function corrigirProvas(jobId, teacherKeyFile, studentSheetFiles) {
 }
 
 // ==========================================================
-// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (MÚLT. ESCOLHA) (Restaurado para PDF)
+// 5️⃣ ENDPOINT: INICIAR VERIFICAÇÃO (MÚLT. ESCOLHA) (Gabarito em Texto)
 // ==========================================================
 app.post("/start-verification", 
   upload.fields([
-      { name: 'teacherKey', maxCount: 1 }, // PDF
-      { name: 'studentSheet', maxCount: 40 } 
+      { name: 'studentSheet', maxCount: 40 } // Apenas as imagens
   ]), 
   (req, res) => {
     
-    if (!req.files || !req.files.teacherKey || !req.files.studentSheet) {
-      return res.status(400).json({ error: "É necessário enviar o PDF do professor e pelo menos uma imagem do aluno." });
+    // Pega o gabarito do corpo do formulário
+    const { gabarito } = req.body;
+
+    if (!req.files || !req.files.studentSheet) {
+      return res.status(400).json({ error: "É necessário enviar pelo menos uma imagem do aluno." });
     }
     
-    const teacherKeyFile = req.files.teacherKey[0]; 
+    if (!gabarito || gabarito.trim() === "") {
+      return res.status(400).json({ error: "É necessário enviar o gabarito (ex: A,B,C)." });
+    }
+    
     const studentSheetFiles = Array.isArray(req.files.studentSheet) 
         ? req.files.studentSheet 
         : [req.files.studentSheet];
@@ -416,13 +422,14 @@ app.post("/start-verification",
     };
 
     console.log(`[JOB ${jobId}] Verificação (Múlt. Escolha) criada. Iniciando em segundo plano...`);
-    corrigirProvas(jobId, teacherKeyFile, studentSheetFiles); 
+    // Passa o gabarito em TEXTO para a função
+    corrigirProvas(jobId, studentSheetFiles, gabarito); 
     res.status(202).json({ jobId: jobId });
   }
 );
 
 // ==========================================================
-// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO) (Usa o 2.0-flash)
+// 6️⃣ FUNÇÃO: CORREÇÃO DISSERTATIVA (SEGUNDO PLANO)
 // ==========================================================
 async function corrigirProvasDissertativas(jobId, studentSheetFiles, gabarito, criterios, notaMaxima) {
   const job = jobs[jobId]; 
