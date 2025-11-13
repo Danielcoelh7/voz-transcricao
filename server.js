@@ -253,7 +253,7 @@ app.post("/generate-activity", async (req, res) => {
     }
 });
 
-
+import sharp from "sharp";
 // ==========================================================
 // 4️⃣ FUNÇÃO DE CORREÇÃO (MÚLTIPLA ESCOLHA) (Usa o 1.5-flash)
 // ==========================================================
@@ -269,15 +269,31 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
   const invalidDetails = gabaritoArray.map((_, i) => ({ "q": i + 1, "correct": false }));
 
   try {
-    // <<< MUDANÇA PRINCIPAL AQUI >>>
-    // Força o uso do modelo 1.5-flash SÓ para esta função
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    // Usa o modelo 1.5 apenas para a correção de gabaritos
+    const model = genAI.getGenerativeModel({ model: "models/gemini-1.5-flash" });
     
     const totalImagens = studentSheetFiles.length;
     console.log(`[JOB ${jobId}] Iniciando correção de ${totalImagens} imagens com o gabarito: [${gabaritoString}]`);
 
     for (let i = 0; i < totalImagens; i++) {
       const studentFile = studentSheetFiles[i];
+
+      // ================================
+      // 🧠 Pré-processamento da imagem
+      // ================================
+      try {
+        const buffer = fs.readFileSync(studentFile.path);
+        const processed = await sharp(buffer)
+          .grayscale()      // deixa preto e branco
+          .threshold(150)   // destaca bolinhas preenchidas
+          .toBuffer();
+
+        fs.writeFileSync(studentFile.path, processed); // sobrescreve o arquivo temporário
+        console.log(`[JOB ${jobId}] Imagem ${studentFile.originalname} pré-processada com Sharp.`);
+      } catch (sharpError) {
+        console.warn(`[JOB ${jobId}] Aviso: falha ao pré-processar imagem ${studentFile.originalname}:`, sharpError.message);
+      }
+
       const studentImagePart = fileToGenerativePart(studentFile.path, studentFile.mimetype);
       if (!studentImagePart) continue;
 
@@ -286,7 +302,6 @@ async function corrigirProvas(jobId, studentSheetFiles, gabaritoString) {
       job.message = `Processando imagem ${i + 1} de ${totalImagens}... (${studentFile.originalname})`;
       console.log(`[JOB ${jobId}] Progresso: ${percent}% - ${job.message}`);
 
-      // ESTE É O PROMPT CORRETO (MEIO-TERMO)
       const singleImagePrompt = `
         Você é um corretor automático de provas de múltipla escolha.
 A imagem enviada contém uma folha de respostas com círculos (bolinhas) para cada alternativa.
@@ -331,12 +346,12 @@ ${gabaritoArray.join(", ")}
         const fullResponseText = result.response.text();
         let aiResponse;
         try {
-            const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
-            aiResponse = JSON.parse(cleanedText);
+          const cleanedText = fullResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
+          aiResponse = JSON.parse(cleanedText);
         } catch (e) {
-            console.error(`[JOB ${jobId}] Erro ao parsear JSON da IA para ${studentFile.originalname}:`, e.message);
-            console.error("Texto recebido da IA:", fullResponseText);
-            throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
+          console.error(`[JOB ${jobId}] Erro ao parsear JSON da IA para ${studentFile.originalname}:`, e.message);
+          console.error("Texto recebido da IA:", fullResponseText);
+          throw new Error(`A IA retornou um formato de JSON inválido para a imagem ${studentFile.originalname}.`);
         }
 
         if (aiResponse && aiResponse.details) {
@@ -359,20 +374,20 @@ ${gabaritoArray.join(", ")}
           details: invalidDetails
         });
       }
+
       await new Promise(resolve => setTimeout(resolve, 2000));
-    } 
+    }
 
     console.log(`[JOB ${jobId}] Processamento de todas as imagens concluído.`);
-    const finalResultsPayload = { results: results }; 
     job.status = "completed";
     job.progress = 100;
     job.message = "Correção concluída!";
-    job.results = finalResultsPayload;
+    job.results = { results };
 
   } catch (error) {
     console.error(`[JOB ${jobId}] Erro geral:`, error.message);
     job.status = "failed";
-    job.error = error.message || "Ocorreu um erro geral ao corrigir as atividades.";
+    job.error = error.message || "Erro geral ao corrigir as atividades.";
   } finally {
     console.log(`[JOB ${jobId}] Limpando arquivos temporários...`);
     tempFilePaths.forEach(path => {
@@ -597,5 +612,6 @@ app.listen(PORT, () => {
   // AQUI ESTÁ A CORREÇÃO FINAL - com crases (`)
   console.log(`✅ Servidor rodando na porta ${PORT}`);
 });
+
 
 
